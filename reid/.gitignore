@@ -1,0 +1,25 @@
+# Dataset — too large for GitHub
+dataset/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Checkpoints — too large
+checkpoints/
+*.pth
+*.pt
+
+# Logs
+logs/
+*.log
+*.csv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
