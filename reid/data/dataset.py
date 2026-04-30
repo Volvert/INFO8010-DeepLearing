@@ -75,7 +75,18 @@ class VehicleReIDDataset(Dataset):
         After this method returns:
           len(self.samples) == len(self.labels) == total number of images
         """
-        pass
+        tree = ET.parse(label_xml)
+        root = tree.getroot()
+
+        for item in root.iter('Item'):
+            name = item.get('imageName')           # "000001.jpg"
+            vehicle_id = int(item.get('vehicleID', -1))  # -1 si absent (query/test)
+            camera_id = int(item.get('cameraID')[1:])   # "c036" → 36
+
+            img_path = os.path.join(self.root, name)
+
+            self.samples.append((img_path, vehicle_id, camera_id))
+            self.labels.append(vehicle_id)
 
     # =========================================================================
     # __len__
@@ -87,7 +98,7 @@ class VehicleReIDDataset(Dataset):
 
     def __len__(self) -> int:
         """Returns the total number of images in the dataset."""
-        pass
+        return len(self.samples)
 
     # =========================================================================
     # __getitem__
@@ -105,11 +116,23 @@ class VehicleReIDDataset(Dataset):
         Loads one image from disk and returns it with its labels.
 
         Returns:
-            image_tensor : torch.Tensor of shape (3, H, W)
+            image : torch.Tensor of shape (3, H, W) or a simple image PIL Image
             vehicle_id   : int — which vehicle is this
             camera_id    : int — which camera captured this image
         """
-        pass
+        img_path, vehicle_id, camera_id = self.samples[idx]
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except Exception:
+            print(f"Warning: failed to load image {img_path}. Skipping.")
+            return self.__getitem__((idx + 1) % len(self.samples))
+          
+        # transform is always set in practice (get_train_transform / get_test_transform)
+        # None only when instantiating the dataset manually for debugging
+        if self.transform is not None:
+            image = self.transform(image)
+
+        return image, vehicle_id, camera_id
 
     # =========================================================================
     # __repr__
@@ -138,4 +161,5 @@ class VehicleReIDDataset(Dataset):
 
     def get_num_identities(self) -> int:
         """Returns the number of unique vehicle identities in the dataset."""
-        pass
+        
+        return len(set(self.labels))
