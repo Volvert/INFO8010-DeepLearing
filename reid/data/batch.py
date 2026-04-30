@@ -1,152 +1,134 @@
 # =============================================================================
-# PKSampler
+# PatchEmbedding
 # =============================================================================
 """
-This file implements the P*K Sampler used by the training DataLoader.
+This file implements the patch embedding module — the entry point of the ViT.
 
-In standard PyTorch training, the DataLoader picks images randomly (shuffle=True).
-This is fine for classification but breaks the batch-hard triplet loss, which
-requires multiple images of the same identity in each batch to mine hard triplets.
+A Transformer expects a sequence of vectors as input.
+An image is a 2D grid — not a sequence of token. PatchEmbedding converts it.
 
-The PKSampler replaces random shuffle with a controlled sampling strategy:
-  - P identities are randomly selected at each batch
-  - K images are randomly selected per identity
-  - batch_size = P * K (e.g. 16 * 4 = 64)
+The image is split into N = (H*W) / P² non-overlapping patches.
+Each patch (P×P pixels, 3 channels) is linearly projected to d_model dimensions.
 
-This guarantees that every batch contains:
-  - K-1 positives per anchor   (same vehicle, different cameras)
-  - (P-1)*K negatives per anchor (different vehicles)
+  N = (224 × 224) / 16² = 196 patches per image
+  each patch : 3×16×16 = 768 raw values -> projected to 192 (d_model)
 
-Convention P*K comes from "In Defense of the Triplet Loss" (Hermans et al., 2017)
-which introduced batch-hard mining for person Re-ID. Vehicle Re-ID reuses the same
-terminology since it is the same problem applied to vehicles.
+A single Conv2d(kernel=P, stride=P) performs both operations in one GPU pass:
+  - kernel=16 covers exactly one patch
+  - stride=16 moves by one patch — no overlap, no gap
+  - out_channels=192 is the learned linear projection
 
-The sampler only manipulates indices — it never loads images.
-Images are loaded by VehicleReIDDataset.__getitem__() in dataset.py.
+Input  : (B, 3, 224, 224)
+Output : (B, 196, 192)   — sequence of 196 tokens ready for the Transformer
 
-See PyTorch Sampler docs: https://docs.pytorch.org/docs/2.11/data.html#torch.utils.data.Sampler
+see: https://docs.pytorch.org/docs/2.11/generated/torch.nn.Conv2d.html
+See: Dosovitskiy et al., "An Image is Worth 16x16 Words", 2020
+See: lec7 pages 51-53
 """
 
-import random
-from collections import defaultdict
-from torch.utils.data import Sampler
+import torch
+import torch.nn as nn
 
 
-# =============================================================================
-# PKSampler
-# =============================================================================
-"""
-Inherits from torch.utils.data.Sampler
-PyTorch requires two methods:
-  __iter__ -> yields batches of indices in PK order
-  __len__  -> returns total number of indices per epoch
-"""
-
-class PKSampler(Sampler):
+class PatchEmbedding(nn.Module):
     """
-    Samples indices such that each batch contains exactly
-    P identities with K images each.
+    Splits a batch of images into non-overlapping patches and projects
+    each patch to a d_model-dimensional vector.
+
+    Input  : (B, C, H, W)              e.g. (64, 3, 224, 224)
+    Output : (B, num_patches, d_model)  e.g. (64, 196, 192)
 
     Attributes:
-        labels     : list of vehicle_id parallel to dataset.samples
-                     used to group indices by identity
-        P          : number of identities per batch
-        K          : number of images per identity per batch
-        num_batches: number of batches per epoch
+        num_patches : int       — total number of patches per image (H*W / P²)
+        proj        : nn.Conv2d — splits and projects in one operation
     """
 
-    def __init__(self, labels: list, P: int, K: int):
+    def __init__(
+        self,
+        img_size:    int = 224,  # height and width of the input image
+        patch_size:  int = 16,   # height and width of each patch
+        in_channels: int = 3,    # RGB
+        d_model:     int = 192,  # output dimension per token (ViT-Tiny)
+    ):
+        super().__init__()
+
+        # =====================================================================
+        # num_patches
+        # =====================================================================
+        """
+        Total number of patches per image.
+        224 // 16 = 14 patches per side -> 14 × 14 = 196 patches total.
+        Stored as an attribute — used by vit.py to size the positional embedding.
+        """
+        self.num_patches: int = (img_size // patch_size) ** 2
+
+        # =====================================================================
+        # proj — Conv2d patch splitter + linear projection
+        # =====================================================================
+        """
+        A single Conv2d with kernel=patch_size and stride=patch_size:
+          in_channels  = C = 3          (RGB input)
+          out_channels = d_model = 192  (learned projection to Transformer width)
+          kernel_size  = patch_size     (covers exactly one patch)
+          stride       = patch_size     (jumps by one patch — no overlap)
+
+        Why kernel == stride ?
+          If stride < kernel -> patches overlap -> same pixel seen multiple times
+          If stride > kernel -> gaps between patches -> pixels lost
+          If stride == kernel -> perfect tiling, each pixel in exactly one patch
+
+        This is mathematically equivalent to:
+          1. extract each 16×16×3 patch manually
+          2. flatten to 768-d vector
+          3. multiply by a learned weight matrix W ∈ R^{768 × 192}
+        But Conv2d does it in one fused GPU operation.
+        """
+        self.proj = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=d_model,
+            kernel_size=patch_size,
+            stride=patch_size,
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            labels : list of vehicle_id for each image in the dataset
-                     comes from dataset.labels (built by _parse_xml)
-            P      : number of identities per batch (e.g. 16)
-            K      : number of images per identity  (e.g. 4)
+            x : (B, C, H, W) — batch of images
+
+        Returns:
+            tokens : (B, num_patches, d_model) — sequence of patch embeddings
         """
-        self.labels = labels
-        self.P = P
-        self.K = K
 
-        # group indices by identity
-        # index_per_identity[vehicle_id] = [idx1, idx2, idx3, ...]
-        # built once in __init__, used at every __iter__ call
-        self.index_per_identity = defaultdict(list)
-
-        # list of unique identities — sampled P at a time in __iter__
-        self.unique_identities = []
-
-        # number of batches per epoch
-        # derived from number of unique identities and P
-        self.num_batches = 0
-
-        self._build_index()
-
-    # =========================================================================
-    # _build_index
-    # =========================================================================
-    """
-    Groups dataset indices by vehicle_id.
-    Called once in __init__.
-
-    After this method:
-      self.index_per_identity[vid] = [idx, idx, ...]  for each identity vid
-      self.unique_identities       = [vid1, vid2, ...]
-      self.num_batches             = len(unique_identities) // P
-    """
-
-    def _build_index(self) -> None:
+        # =====================================================================
+        # 1. Conv2d projection
+        # =====================================================================
         """
-        Builds self.index_per_identity, self.unique_identities
-        and self.num_batches from self.labels.
+        Each 16×16 patch is projected to a 192-d vector.
+        The spatial output is a 14×14 grid of 192-d vectors.
+        One grid cell = one patch token.
         """
-        for idx, vid in enumerate(self.labels):
-            self.index_per_identity[vid].append(idx)
+        x = self.proj(x)      # (B, 3, 224, 224) -> (B, 192, 14, 14)
 
-        self.unique_identities = list(self.index_per_identity.keys())
-        self.num_batches = len(self.unique_identities) // self.P
-
-    # =========================================================================
-    # __iter__
-    # =========================================================================
-    """
-    Called by the DataLoader at the start of each epoch.
-    Yields indices one by one in PK order.
-
-    Algorithm:
-      1. shuffle the list of unique identities
-      2. take P identities at a time
-      3. for each identity, sample K indices (with replacement if needed)
-      4. yield the P*K indices as a flat sequence
-    """
-
-    def __iter__(self):
+        # =====================================================================
+        # 2. Flatten spatial dimensions
+        # =====================================================================
         """
-        Yields all indices for one epoch in PK order.
-        Total indices yielded = num_batches * P * K.
+        The 14×14 spatial grid is flattened into a sequence of 196 positions.
+        We flatten only the last two dimensions (H/P and W/P) — not the batch
+        dimension nor the channel dimension.
+        start_dim=2 means : keep dim 0 (batch) and dim 1 (channels), flatten the rest.
         """
-        copy_of_identities = self.unique_identities.copy()
-        random.shuffle(copy_of_identities)
-        for i in range(0, self.num_batches * self.P, self.P):
-            selected_vids = copy_of_identities[i : i + self.P]
-            for vid in selected_vids:
-                list_of_idx = self.index_per_identity[vid]
 
-                if len(list_of_idx) >= self.K:
-                    chosen = random.sample(list_of_idx, self.K)
-                else:
-                    chosen = random.choices(list_of_idx, k=self.K)
+        x = x.flatten(start_dim=2) # (B, 192, 14, 14) -> (B, 192, 196)
 
-                yield from chosen
+        # =====================================================================
+        # 3. Transpose to Transformer convention
+        # =====================================================================
+        """
+        Transformer expects (batch, sequence_length, features).
+        After flatten we have (batch, features, sequence_length) — wrong order.
+        Transpose dims 1 and 2 to swap features and sequence_length.
+        """
+        x = x.transpose(1,2) # (B, 192, 196) -> (B, 196, 192)
 
-
-    # =========================================================================
-    # __len__
-    # =========================================================================
-    """
-    Called by the DataLoader to know the total number of indices per epoch.
-    Must be consistent with __iter__ — same total count.
-    """
-
-    def __len__(self) -> int:
-        """Returns the total number of indices yielded per epoch."""
-        return self.num_batches * self.P * self.K
+        return x
