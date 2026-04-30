@@ -24,9 +24,127 @@ Since new vehicles appear at test time, we do not classify - we learn an embeddi
 
 such that same vehicle $\rightarrow$ close vectors, different vehicles $\rightarrow$ distant vectors. Retrieval is then a nearest-neighbor search.
 
-## Dataset
+## Dataset — AIC21 Track 2 ReID
 
-**AI City Challenge 2021 - Track 2.** 85 058 cropped images, 880 identities across non-overlapping cameras. Real + synthetic ([VehicleX](https://github.com/yorkeyao/VehicleX)).
+The project uses the **AI City Challenge 2021 Track 2** benchmark for city-scale vehicle re-identification.
+The dataset contains **85 058 cropped vehicle images** across **880 unique identities**, captured by **46 non-overlapping cameras** in real traffic conditions.
+A subset of images is synthetically generated via [VehicleX](https://github.com/yorkeyao/VehicleX) (3D-rendered vehicles) and merged into the training set to compensate for the limited real data.
+
+---
+
+#### Dataset splits
+
+| Split | Folder | Images | Identities | Role |
+|---|---|---|---|---|
+| Training | `image_train/` | 52 717 | 440 | Model training (+ VehicleX synthetic) |
+| Gallery | `image_test/` | 31 238 | 440 | Retrieval target at evaluation |
+| Query | `image_query/` | 1 103 | 440 | Images to match against the gallery |
+
+> Training and test identities are **disjoint** — the model never sees test vehicles during training.
+> This forces genuine metric learning rather than memorization.
+
+---
+
+### Annotation files
+ 
+| File | Content | Used by |
+|---|---|---|
+| `train_label.xml` | `vehicleID` + `cameraID` per training image. The only file with both labels — `vehicleID` drives PK batch construction, `cameraID` filters same-camera pairs at evaluation | `dataset.py → _parse_xml()` |
+| `test_label.xml` | `cameraID` per gallery image. No `vehicleID` by design — it is the ground truth the model must predict; providing it would be data leakage | Evaluation protocol |
+| `query_label.xml` | `cameraID` per query image. Same rationale as `test_label.xml` | Evaluation protocol |
+| `train_track.txt` | Each line lists all images of the same vehicle on the same camera in temporal order. Enables Query Expansion: averaging track embeddings produces a more robust query vector than a single image (technique used by 2021 winners, optional for MVP) | Query expansion (Optional) |
+| `test_track.txt` | Same structure as `train_track.txt` for the gallery split | Query expansion (Optional) |
+| `name_train.txt` | Plain list of the 52 717 filenames in `image_train/` | Sanity check |
+| `name_test.txt` | Plain list of the 31 238 filenames in `image_test/` | Sanity check |
+| `name_query.txt` | Plain list of the 1 103 filenames in `image_query/` | Sanity check |
+ 
+> A retrieved gallery image is counted as a true positive only when it shows the same vehicle on a **different** camera.
+> Same vehicle, same camera = ignored. This enforces genuine cross-camera retrieval.
+
+**Why `cameraID` matters at evaluation:**
+a match is only counted as a true positive when the retrieved image shows the **same vehicle on a different camera**.
+Same vehicle + same camera = ignored. This enforces cross-camera retrieval.
+
+#### XML format (`train_label.xml`)
+```xml
+<TrainingImages Version="1.0">
+  <Items number="52717">
+    <Item imageName="000001.jpg" vehicleID="001" cameraID="c036"/>
+    <Item imageName="000002.jpg" vehicleID="001" cameraID="c043"/>
+    ...
+  </Items>
+</TrainingImages>
+```
+
+---
+
+#### Evaluation output format
+
+For each query image, the model produces one `.txt` file listing gallery image IDs ranked by **ascending embedding distance**:
+
+```
+# 000001.txt  — results for image_query/000001.jpg
+5021          ← closest gallery image  (image_test/005021.jpg)
+12701
+19500
+13169
+...           ← top-50 matches
+```
+
+The evaluation script reads these files and computes **Rank-1 accuracy** and **mAP** against the ground-truth labels.
+An example of the expected format is provided in `tools/dist_example/`.
+
+---
+
+#### Two-dataset merge strategy
+
+```mermaid
+flowchart TD
+    A["train_label.xml\n image_train/\n VehicleX + AIVehicle3D"] -->|"_parse_xml()"| B["TrainDataset\n samples + labels"]
+    B -->|"PKSampler\n P=16 x K=4"| C["Batch 64\n 16 ids x 4 imgs"]
+    C -->|"Triplet Loss"| D["Trained ViT"]
+ 
+    E["query_label.xml\n image_query/"] -->|"_parse_xml()"| F["QueryDataset"]
+    G["test_label.xml\n image_test/"] -->|"_parse_xml()"| H["GalleryDataset"]
+ 
+    D -->|"encode"| F
+    D -->|"encode"| H
+ 
+    F --> I["1 103 x 128 \n query embeddings"]
+    H --> J["31 238 x 128 \n gallery embeddings"]
+ 
+    I --> K["kNN\n1103 x 31238"]
+    J --> K
+ 
+    K -->|"top-50"| L["000001.txt ..."]
+    L --> M["Rank-1 · mAP"]
+ 
+    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style B fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style C fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style D fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style E fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    style F fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    style G fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    style H fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    style I fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style J fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style K fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style L fill:#FCEBEB,stroke:#E24B4A,color:#501313
+    style M fill:#FCEBEB,stroke:#E24B4A,color:#501313
+```
+
+> **Key rule:** the synthetic dataset is used **only for training**.
+> The gallery (`image_test/`) and queries (`image_query/`) are always real images exclusively.
+
+---
+
+#### Visualization tool
+
+`tools/visualize.py` is a Tkinter GUI that renders the retrieval results visually.
+It reads the `.txt` files from a results directory and displays the query image alongside its top-50 gallery matches.
+
+> ⚠️ The script is written in **Python 2** — port to Python 3 before use (`Tkinter` → `tkinter`, `print` statements, etc.).
 
 ---
 
