@@ -79,6 +79,22 @@ transpose(1, 2)    :  (B, 196, 192)         ← (batch, seq_len, d_model)
 | `num_patches` | 196 | $(224/16)^2 = 14^2 = 196$ |
 | Conv2d weights | $3 \times 16 \times 16 \times 192 = 147\,456$ | learned projection |
 
+#### Diagram
+
+```mermaid
+flowchart TD
+    A["Input batch\n B × 3 × 224 × 224"] --> B
+    B["Conv2d\n kernel=16  stride=16  out=192\n B × 192 × 14 × 14"] --> C
+    C["flatten start_dim=2\n B × 192 × 196"] --> D
+    D["transpose dim 1 and 2\n B × 196 × 192\n 196 tokens  ·  d_model=192"] --> E
+    E["Transformer input\n sequence of 196 patch tokens"]
+
+    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style B fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style C fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style D fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style E fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+```
 ---
 
 ## CLS Token + Positional Embedding — `model/vit.py`
