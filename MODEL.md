@@ -24,10 +24,13 @@ flowchart LR
     B["Patch Embedding\n patch_embedded.py\n B × 196 × 192"] --> C
     C["CLS token prepend\n vit.py\n B × 197 × 192"] --> D
     D["Positional embedding\n vit.py\n B × 197 × 192"] --> E
-    E["Transformer x6\n transformer.py + block.py + attention.py\n B × 197 × 192"] --> F
+    E["Transformer x6\n transformer.py\n B × 197 × 192"] --> F
     F["Extract CLS token\n vit.py\n B × 192"] --> G
     G["Projection head\n Linear + L2 normalize\n B × 128"]
-
+ 
+    ATT["MultiHeadSelfAttention\n attention.py\n B × 8 × 197 × 197"] --> E
+    BLK["Encoder Block\n block.py\n LayerNorm · Attention · skip\n LayerNorm · FFN · skip"] --> E
+ 
     style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
     style B fill:#E6F1FB,stroke:#378ADD,color:#0C447C
     style C fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
@@ -35,6 +38,8 @@ flowchart LR
     style E fill:#FFF4E5,stroke:#E8A020,color:#7A4500
     style F fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
     style G fill:#FCEBEB,stroke:#E24B4A,color:#501313
+    style ATT fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style BLK fill:#E6F1FB,stroke:#378ADD,color:#0C447C
 ```
 
 ---
