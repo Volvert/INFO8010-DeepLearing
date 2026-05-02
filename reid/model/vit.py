@@ -8,20 +8,20 @@ It assembles all sub-modules in order and exposes a single forward() method
 that maps a batch of images to a batch of L2-normalized 128-d embeddings.
 
 Role of each sub-module called here:
-  PatchEmbedding  -> splits images into 196 patch tokens (B, 196, 192)
+  PatchEmbedding  -> splits images into 196 patch tokens (batch_size, 196, 192)
   cls_token       -> learnable aggregation slot prepended to the sequence
   pos_embed       -> learnable positional encoding added element-wise
   Transformer     -> 6 encoder blocks, each with attention + FFN
   proj_head       -> Linear(192->128) + L2 normalize
 
 Full tensor flow:
-  (B, 3, 224, 224)   input batch
-      -> (B, 196, 192)   patch tokens          patch_embedded.py
-      -> (B, 197, 192)   + CLS token prepended vit.py
-      -> (B, 197, 192)   + positional embedding vit.py
-      -> (B, 197, 192)   after Transformer      transformer.py
-      -> (B, 192)        CLS token extracted    vit.py
-      -> (B, 128)        projected + L2 norm    vit.py
+  (batch_size, 3, 224, 224)   input batch
+      -> (batch_size, 196, 192)   patch tokens          patch_embedded.py
+      -> (batch_size, 197, 192)   + CLS token prepended vit.py
+      -> (batch_size, 197, 192)   + positional embedding vit.py
+      -> (batch_size, 197, 192)   after Transformer      transformer.py
+      -> (batch_size, 192)        CLS token extracted    vit.py
+      -> (batch_size, 128)        projected + L2 norm    vit.py
 
 For vit classification tuto see: https://medium.com/@bskkim2022/paper-reimplementation-vit-vision-transformer-eed3ad20dfe7
 Reduce overfitting with dropout see: https://docs.pytorch.org/docs/2.11/generated/torch.nn.Dropout.html
@@ -41,8 +41,8 @@ class VehicleViT(nn.Module):
     Maps each input image to a 128-dimensional L2-normalized embedding.
     Same vehicle -> close vectors. Different vehicle -> distant vectors.
 
-    Input  : (B, 3, 224, 224)
-    Output : (B, 128)          L2-normalized embedding on the unit hypersphere
+    Input  : (batch_size, 3, 224, 224)
+    Output : (batch_size, 128)          L2-normalized embedding on the unit hypersphere
 
     Attributes:
         patch_embed : PatchEmbedding — splits image into patch token sequence
@@ -72,7 +72,7 @@ class VehicleViT(nn.Module):
         # =====================================================================
         """
         Instantiates PatchEmbedding from patch_embedded.py.
-        Converts (B, 3, 224, 224) -> (B, 196, 192).
+        Converts (batch_size, 3, 224, 224) -> (batch_size, 196, 192).
         num_patches is stored here to size the positional embedding.
         """
         self.patch_embed = PatchEmbedding(
@@ -87,8 +87,8 @@ class VehicleViT(nn.Module):
         # =====================================================================
         """
         Learnable vector of shape (1, 1, 192).
-        Stored as (1, 1, d_model) — the batch dimension is 1, not B, .
-        At forward time it is expanded to (B, 1, 192) and prepended to the
+        Stored as (1, 1, d_model) — the batch dimension is 1, not batch_size, .
+        At forward time it is expanded to (batch_size, 1, 192) and prepended to the
         196 patch tokens, making the sequence 197 tokens long.
 
         It has no spatial meaning — its only role is to aggregate image-level
@@ -110,7 +110,7 @@ class VehicleViT(nn.Module):
         broadcasting applies it identically to every image in the batch.
 
         Added element-wise to the token sequence after CLS prepend:
-          x = x + pos_embed   ->   (B, 197, 192) + (1, 197, 192) = (B, 197, 192)
+          x = x + pos_embed   ->   (batch_size, 197, 192) + (1, 197, 192) = (batch_size, 197, 192)
 
         Self-attention is permutation-invariant — without this, the Transformer
         cannot distinguish the top-left patch from the bottom-right patch.
@@ -136,7 +136,7 @@ class VehicleViT(nn.Module):
         Stack of `depth` encoder blocks from transformer.py.
         Each block applies: LayerNorm -> Attention -> skip + LayerNorm -> FFN -> skip
         Processes the full sequence of 197 tokens.
-        Input and output shape are identical: (B, 197, 192).
+        Input and output shape are identical: (batch_size, 197, 192).
         """
         self.transformer = Transformer(
             d_model=d_model,
@@ -200,63 +200,63 @@ class VehicleViT(nn.Module):
     Full forward pass from raw image batch to L2-normalized embeddings.
 
     Step-by-step:
-      1. patch_embed  : (B, 3, 224, 224) -> (B, 196, 192)
-      2. expand CLS   : (1, 1, 192)      -> (B, 1, 192)
-      3. prepend CLS  : cat((B,1,192), (B,196,192), dim=1) -> (B, 197, 192)
-      4. add pos_embed: (B, 197, 192) + (1, 197, 192)      -> (B, 197, 192)
+      1. patch_embed  : (batch_size, 3, 224, 224) -> (batch_size, 196, 192)
+      2. expand CLS   : (1, 1, 192)      -> (batch_size, 1, 192)
+      3. prepend CLS  : cat((batch_size,1,192), (batch_size,196,192), dim=1) -> (batch_size, 197, 192)
+      4. add pos_embed: (batch_size, 197, 192) + (1, 197, 192)      -> (batch_size, 197, 192)
       5. pos_drop     : stochastic dropout on token sequence
-      6. transformer  : (B, 197, 192)                      -> (B, 197, 192)
-      7. extract CLS  : x[:, 0, :]                         -> (B, 192)
-      8. norm         : LayerNorm                          -> (B, 192)
-      9. proj_head    : Linear(192->128)                   -> (B, 128)
-     10. L2 normalize : F.normalize(x, dim=-1)             -> (B, 128)
+      6. transformer  : (batch_size, 197, 192)                      -> (batch_size, 197, 192)
+      7. extract CLS  : x[:, 0, :]                         -> (batch_size, 192)
+      8. norm         : LayerNorm                          -> (batch_size, 192)
+      9. proj_head    : Linear(192->128)                   -> (batch_size, 128)
+     10. L2 normalize : F.normalize(x, dim=-1)             -> (batch_size, 128)
     """
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x : (B, 3, H, W) — batch of normalized images
+            x : (batch_size, 3, H, W) — batch of normalized images
 
         Returns:
-            embeddings : (B, 128) — L2-normalized embedding vectors
+            embeddings : (batch_size, 128) — L2-normalized embedding vectors
         """
-        B = x.shape[0]   # batch size — needed to expand cls_token
+        batch_size = x.shape[0]   # batch size — needed to expand cls_token
 
         # step 1 — patch embedding
-        x = self.patch_embed(x)                          # (B, 196, 192)
+        x = self.patch_embed(x)                          # (batch_size, 196, 192)
 
         # step 2 — expand cls_token to batch size
-        cls = self.cls_token.expand(B, -1, -1)           # (B, 1, 192)
+        cls = self.cls_token.expand(batch_size, -1, -1)           # (batch_size, 1, 192)
         # -1 means "keep this dimension unchanged"
         # expand does not copy memory — it creates a view
 
         # step 3 — prepend CLS token to patch sequence
-        x = torch.cat([cls, x], dim=1)                   # (B, 197, 192)
+        x = torch.cat([cls, x], dim=1)                   # (batch_size, 197, 192)
         # dim=1 is the sequence dimension
         # CLS occupies position 0, patches occupy positions 1-196
 
         # step 4 — add positional embedding
-        x = x + self.pos_embed                           # (B, 197, 192)
+        x = x + self.pos_embed                           # (batch_size, 197, 192)
         # pos_embed is (1, 197, 192) — broadcast over batch dimension
 
         # step 5 — dropout on token sequence
-        x = self.pos_drop(x)                             # (B, 197, 192)
+        x = self.pos_drop(x)                             # (batch_size, 197, 192)
 
         # step 6 — transformer encoder
-        x = self.transformer(x)                          # (B, 197, 192)
+        x = self.transformer(x)                          # (batch_size, 197, 192)
 
         # step 7 — extract CLS token (position 0)
-        x = x[:, 0, :]                                   # (B, 192)
+        x = x[:, 0, :]                                   # (batch_size, 192)
         # x[:, 0, :] means: all batches, position 0, all features
 
         # step 8 — layer norm
-        x = self.norm(x)                                 # (B, 192)
+        x = self.norm(x)                                 # (batch_size, 192)
 
         # step 9 — projection head
-        x = self.proj_head(x)                            # (B, 128)
+        x = self.proj_head(x)                            # (batch_size, 128)
 
         # step 10 — L2 normalize onto unit hypersphere
-        x = F.normalize(x, dim=-1)                       # (B, 128)
+        x = F.normalize(x, dim=-1)                       # (batch_size, 128)
         # F.normalize divides each vector by its L2 norm
         # after this step: ||x[i]|| = 1 for all i
         # cosine distance = euclidean distance on the unit hypersphere
