@@ -1,17 +1,23 @@
-## Data Initialization
+# Data Initialization
+
+## Overview
+
+This module handles everything between raw files on disk and a batch of tensors
+ready for the model. Four files with strictly separated responsibilities.
+
+| File | Role |
+|---|---|
+| `data/data_transforms.py` | Two image preprocessing pipelines — randomized for train, deterministic for query/test |
+| `data/dataset.py` | Reads the XML annotation file, loads images on the fly, exposes the PyTorch Dataset interface |
+| `data/batch.py` | Controlled P×K batch construction required by the triplet loss |
+| `data/dataloader.py` | Wraps dataset + sampler into PyTorch DataLoaders — one per split |
 
 ```mermaid
-flowchart TD
-    XML("train_label.xml")
-    T("data_transforms.py")
-    D("dataset.py")
-    B("batch.py")
-    DL("dataloader.py")
-
-    XML -- "parsed once at construction" --> D
-    T -- "get_train_transform()\nget_test_transform()" --> D
-    D -- "dataset.labels" --> B
-    D -- "dataset" --> DL
+flowchart LR
+    XML("train_label.xml") -- "parsed once" --> D("dataset.py")
+    T("data_transforms.py") -- "get_train_transform()\nget_test_transform()" --> D
+    D -- "dataset.labels" --> B("batch.py")
+    D -- "dataset" --> DL("dataloader.py")
     B -- "PKSampler" --> DL
 
     style XML fill:#E1F5EE,stroke:#1D9E75,color:#085041
@@ -21,98 +27,112 @@ flowchart TD
     style DL fill:#E6F1FB,stroke:#378ADD,color:#0C447C
 ```
 
-```
-train_label.xml       ← source of labels (vehicleID, cameraID) for each image
-      ↓
-data_transforms.py    ← two transform pipelines passed to the Dataset constructor
-                            train : crop · flip · jitter · blur · erase · normalize
-      ↓                     test  : resize · normalize — deterministic, required for kNN
-
-dataset.py            ← reads XML, loads images on the fly, returns (tensor, vid, cid)
-                         self.samples[i] = (img_path, vehicle_id, camera_id)
-      ↓                  self.labels[i]  = vehicle_id — only attribute consumed by PKSampler
-
-batch.py              ← receives dataset.labels, groups indices by vehicle_id
-                         samples P=16 identities × K=4 images per batch
-      ↓                  guarantees 3 positives and 60 negatives per anchor for the triplet loss
-
-dataloader.py         ← wraps dataset + PKSampler into a PyTorch DataLoader
-                            train : drop_last=True  — incomplete batch breaks the triplet loss
-                            query/test : shuffle=False — fixed order required for kNN
-```
-
-## Model Construction
-The model is a Vision Transformer (ViT-Tiny) trained from scratch.
-It maps each input image to a 128-dimensional embedding vector.
-
-### Patch Embedding
-
-#### Theory
-
-A Transformer expects a **sequence of vectors** as input.
-An image is not a sequence — it is a 2D grid of pixels.
-Patch embedding is the operation that converts a 2D image into a 1D sequence of tokens.
-
-**Reference:** lec7 pages 51–53 (Dosovitskiy et al., "An Image is Worth 16x16 Words", 2020)
-
-#### Key formula
-
-$$N = \frac{H \times W}{P^2} = \frac{224 \times 224}{16^2} = 196 \text{ tokens}$$
-
-Each patch covers `P×P = 16×16` pixels across 3 RGB channels = 768 raw values.
-A linear projection maps those 768 values down to `d_model = 192` — the working
-dimension of the Transformer throughout the entire network.
-
-### Why Conv2d instead of manual splitting
-
-A manual split followed by a linear layer would be two separate operations.
-`Conv2d(in=3, out=192, kernel=16, stride=16)` performs both in a single GPU pass:
-- `kernel=16` covers exactly one 16×16 patch
-- `stride=16` moves by exactly one patch — no overlap, no gap
-- `out=192` is the linear projection learned during training
-
 ---
 
-#### Tensor flow
+## Data Augmentation — `data/data_transforms.py`
 
-```
-Input batch        :  (B,   3, 224, 224)
+Augmentation is applied **online** — at each call to `__getitem__`, a fresh
+random transform is applied to the image. No new files are created on disk.
+The model sees a statistically different version of each image at every epoch.
 
-Conv2d k=16 s=16   :  (B, 192,  14,  14)   ← 196 patch positions on a 14×14 grid
+Two purposes: **regularization** (prevents memorizing exact pixel values) and
+**invariance** (teaches the model to ignore variations that exist across cameras —
+lighting, blur, partial occlusion).
 
-flatten(start=2)   :  (B, 192, 196)         ← spatial grid → flat sequence
+### Training pipeline
 
-transpose(1, 2)    :  (B, 196, 192)         ← (batch, seq_len, d_model)
-                                               ready for the Transformer
-```
-
----
-
-#### Diagram
-
-```mermaid
-flowchart TD
-    A["Input batch\n B × 3 × 224 × 224"] --> B
-    B["Conv2d\n kernel=16  stride=16  out=192\n B × 192 × 14 × 14"] --> C
-    C["flatten start_dim=2\n B × 192 × 196"] --> D
-    D["transpose dim 1 and 2\n B × 196 × 192\n 196 tokens  ·  d_model=192"] --> E
-    E["Transformer input\n sequence of 196 patch tokens"]
-
-    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
-    style B fill:#E6F1FB,stroke:#378ADD,color:#0C447C
-    style C fill:#E6F1FB,stroke:#378ADD,color:#0C447C
-    style D fill:#E6F1FB,stroke:#378ADD,color:#0C447C
-    style E fill:#FFF4E5,stroke:#E8A020,color:#7A4500
-```
----
-
-#### Parameters summary
-
-| Parameter | Value | Derived from |
+| Step | Transform | Purpose |
 |---|---|---|
-| `img_size` | 224 | ImageNet convention |
-| `patch_size` | 16 | `O(N²)` attention — patch=8 would 4× memory |
-| `in_channels` | 3 | RGB |
-| `d_model` | 192 | ViT-Tiny standard width |
-| `num_patches` | 196 | `(224/16)² = 14² = 196` |
-| Conv2d params | 3×16×16×192 = 147 456 | learned projection weights |
+| 1 | `RandomResizedCrop scale=(0.6, 1.0)` | Imperfect detection crop simulation |
+| 2 | `RandomHorizontalFlip p=0.5` | Lateral symmetry — no vertical flip |
+| 3 | `ColorJitter brightness=0.3 hue=0.05` | Cross-camera lighting variance |
+| 4 | `GaussianBlur sigma=(0.1, 0.5)` | Low-quality or motion-blurred cameras |
+| 5 | `ToTensor` | PIL HWC uint8 → PyTorch CHW float32 |
+| 6 | `Normalize` ImageNet stats | Equal variance across channels |
+| 7 | `RandomErasing p=0.5` | Occlusion simulation — forces global representation |
+
+`ToTensor` is the mandatory boundary — `Normalize` and `RandomErasing` require
+tensors and cannot appear before it.
+
+### Test pipeline
+
+`Resize → ToTensor → Normalize` — fully deterministic. Query and gallery
+embeddings must be identical across runs for kNN retrieval to be reproducible.
+The normalization constants must be strictly identical to training:
+
+$$\text{pixel}_{\text{norm}} = \frac{\text{pixel} - \mu}{\sigma}, \quad \mu = [0.485,\ 0.456,\ 0.406], \quad \sigma = [0.229,\ 0.224,\ 0.225]$$
+
+---
+
+## Dataset — `data/dataset.py`
+
+Implements the standard PyTorch `Dataset` interface. Reads `train_label.xml`
+once at construction and builds two parallel lists:
+
+```
+self.samples[i] = (img_path, vehicle_id, camera_id)
+self.labels[i]  = vehicle_id
+```
+
+`self.labels[i]` is always the `vehicle_id` of `self.samples[i]`.
+`PKSampler` reads only `self.labels` — it never touches image files.
+
+`vehicleID` defaults to `-1` when absent — `query_label.xml` and `test_label.xml`
+do not carry `vehicleID` because it is the ground truth to predict. Providing it
+as input would be data leakage.
+
+---
+
+## Batch Construction — `data/batch.py`
+
+### Why PKSampler
+
+Standard random shuffle cannot guarantee that multiple images of the same vehicle
+appear together in a batch. The batch-hard triplet loss requires it — it mines
+the hardest positive and hardest negative **within the batch**.
+
+PKSampler guarantees every batch contains exactly:
+
+| | Value | Formula |
+|---|---|---|
+| Identities per batch | 16 | P |
+| Images per identity | 4 | K |
+| Batch size | 64 | P × K |
+| Positives per anchor | 3 | K − 1 |
+| Negatives per anchor | 60 | (P − 1) × K |
+
+### Algorithm
+
+At construction — ```_build_index``` groups all dataset indices by identity:
+
+$$\text{index per identity[vid]} = [idx₁, idx₂, idx₃, ...]$$
+
+At each epoch — ```__iter__``` shuffles the 440 identities, slices P at a time,
+samples K indices per identity, yields all P×K indices as a flat sequence.
+
+$$\text{num}_\text{batches} = \lfloor 440/16 \rfloor = 27 \quad \Rightarrow \quad 27 \times 64 = 1728 \text{images per epoch}$$
+
+Not all 52 717 images are seen every epoch — coverage builds across epochs as
+identities are reshuffled.
+
+---
+
+## DataLoaders — ```data/dataloader.py```
+
+Three functions, one per split. The differences are deliberate:
+
+| | Train | Query | Test |
+|---|---|---|---|
+| Sampler | PKSampler | none | none |
+| `shuffle` | forbidden | `False` | `False` |
+| `drop_last` | `True` | `False` | `False` |
+| `batch_size` | 64 | 128 | 128 |
+
+`drop_last=True` for train — an incomplete batch has fewer than P×K images and
+breaks the triplet loss structure.
+
+`shuffle=False` for query and test — embeddings are stored sequentially and
+matched by position against ground-truth labels. Any reordering corrupts kNN.
+
+`pin_memory=True` on all three — keeps tensors in page-locked CPU memory,
+which the GPU can access directly via DMA without OS scheduling overhead.
