@@ -167,12 +167,6 @@ the model from over-relying on specific token positions. Disabled automatically 
 
 ---
 
-## Encoder Block — `model/block.py`
-
-*To be documented — LayerNorm + Multi-Head Attention + skip connection + LayerNorm + FFN + skip connection.*
-
----
-
 ## Multi-Head Self-Attention — `model/attention.py`
  
 ### What attention solves
@@ -329,6 +323,164 @@ going through intermediate layers.
 > one GPU call instead of three, with identical mathematical result.
  
 ---
+# Encoder Block — `model/block.py`
+
+## What the block does
+
+After the CLS token and positional embedding are added, the sequence `(B, 197, 192)`
+enters a stack of 6 identical encoder blocks. Each block takes the full sequence,
+lets every token communicate with every other via attention, then refines each
+token independently via a feedforward network.
+
+The output is the same shape `(B, 197, 192)` — the sequence is enriched, not transformed.
+
+---
+
+## The two sub-modules
+
+Each encoder block applies **two sub-modules in sequence**, each wrapped in a
+skip connection and preceded by a LayerNorm. This is the **Pre-Norm** variant
+used in modern ViTs (lec7 page 39):
+
+$$\mathbf{X}' = \mathbf{X} + \text{Attention}(\text{LayerNorm}(\mathbf{X}))$$
+
+$$\mathbf{X}'' = \mathbf{X}' + \text{FFN}(\text{LayerNorm}(\mathbf{X}'))$$
+
+The original paper (Vaswani et al., 2017) applied LayerNorm **after** the sub-module
+(Post-Norm). Modern implementations apply it **before** (Pre-Norm) — it stabilizes
+gradients during early training when weights are still random.
+
+---
+
+## Skip connections — why they matter
+
+The `+` in the formula is not just addition. It creates a **gradient highway**
+directly from the loss back to the early layers, bypassing the sub-module entirely.
+
+Without skip connections, gradients must flow through all 6 blocks and all the
+non-linearities inside each sub-module. They vanish before reaching the early layers
+and training stalls.
+
+With skip connections, even if the sub-module learns nothing useful, the input
+passes through unchanged. The model degrades gracefully rather than breaking.
+
+On vehicle images, this means that if a block cannot find useful cross-patch
+relationships for a particular identity, the representations from the previous
+block are preserved intact.
+
+---
+
+## LayerNorm — why per token
+
+LayerNorm normalizes the 192 features of **each token independently**:
+
+$$\text{LayerNorm}(\mathbf{u}) = \gamma \odot \frac{\mathbf{u} - \mu}{\sigma} + \beta$$
+
+where $\mu$ and $\sigma$ are computed over the 192 features of a single token,
+not over the batch. $\gamma$ and $\beta$ are learned scale and shift parameters.
+
+This is different from BatchNorm which normalizes across the batch dimension.
+LayerNorm is preferred in Transformers because the sequence length varies and
+the batch statistics are unreliable for sequential data.
+
+On your 197 tokens: each token's 192 values are independently centered and scaled
+before being fed to the attention or FFN sub-module. This keeps the input
+distribution stable regardless of what the previous layer produced.
+
+---
+
+## FFN — feedforward network
+
+The FFN is a two-layer MLP applied **independently to each token**:
+
+$$\text{FFN}(\mathbf{x}) = \text{Linear}_{2}(\text{Dropout}(\text{GELU}(\text{Linear}_{1}(\mathbf{x}))))$$
+
+| Layer | Shape | Role |
+|---|---|---|
+| `Linear(192 → 768)` | expands by `mlp_ratio=4` | projects to a richer feature space |
+| `GELU` | — | smooth non-linearity |
+| `Dropout(p=0.1)` | — | stochastic regularization |
+| `Linear(768 → 192)` | compresses back | projects back to d_model |
+
+**Why expand then compress ?**
+The expansion to 768 dimensions gives the network capacity to represent complex
+non-linear combinations of the 192 attention features. The compression back to 192
+forces it to distill only the relevant information.
+
+**Why GELU instead of ReLU ?**
+GELU (Gaussian Error Linear Unit) is a smooth approximation of ReLU — it does not
+hard-zero negative inputs but attenuates them softly. This produces smoother gradients
+and consistently outperforms ReLU on Transformer architectures.
+
+**Why applied independently to each token ?**
+The FFN operates on one token at a time — it does not mix information across tokens.
+Cross-token communication happens exclusively in the attention sub-module. The FFN
+refines each token's representation in its own feature space after it has been
+enriched by attention.
+
+On your vehicle patches: after attention has let the wheel token gather information
+from the logo and the hood, the FFN processes the wheel token's updated representation
+independently to extract higher-level features.
+
+---
+This block is repeated 6 times in `transformer.py`. Each repetition allows tokens
+to attend over increasingly abstract representations of the vehicle.
+
+## Parameters per block
+
+| Component | Parameters | Shape |
+|---|---|---|
+| LayerNorm 1 | γ, β | `192 × 2` |
+| MultiHeadSelfAttention | qkv + W_O | `4 × 192 × 192` |
+| LayerNorm 2 | γ, β | `192 × 2` |
+| FFN Linear 1 | W, b | `192 × 768` |
+| FFN Linear 2 | W, b | `768 × 192` |
+
+Total per block ≈ **295 000 parameters** × 6 blocks ≈ **1.77M parameters** for the
+full Transformer stack.
+
+---
+
+## Diagram
+
+```mermaid
+flowchart TD
+    A["Input\n B × 197 × 192"] --> LN1
+    A -->|"skip connection"| SK1
+
+    LN1["LayerNorm 1"] --> ATT
+    ATT["MultiHeadSelfAttention\n attention.py"] -->|"attention output"| SK1
+
+    SK1(("⊕ add")) --> B["B × 197 × 192"]
+
+    B --> LN2
+    B -->|"skip connection"| SK2
+
+    LN2["LayerNorm 2"] --> FFN
+    FFN["FFN\n Linear 192→768\n GELU · Dropout\n Linear 768→192"] -->|"FFN output"| SK2
+
+    SK2(("⊕ add")) --> OUT["Output\n B × 197 × 192"]
+
+    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style LN1 fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style ATT fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style SK1 fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style B fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style LN2 fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style FFN fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style SK2 fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style OUT fill:#FCEBEB,stroke:#E24B4A,color:#501313
+```
+
+---
+
+## Reference
+
+lec7 page 39 — Residual connections and layer normalization.
+
+$$\mathbf{X}' = \mathbf{X} + \text{SubModule}(\text{LayerNorm}(\mathbf{X})) \quad \text{(Pre-Norm, modern)}$$
+
+$$\mathbf{X}' = \text{LayerNorm}(\mathbf{X} + \text{SubModule}(\mathbf{X})) \quad \text{(Post-Norm, original paper)}$$
 
 ## Projection Head — `model/vit.py`
 
