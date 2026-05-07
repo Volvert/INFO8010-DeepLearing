@@ -1,0 +1,11 @@
+# ViT-Tiny architecture defaults
+model:
+  img_size:    224
+  patch_size:  16
+  in_channels: 3
+  d_model:     192
+  depth:       6
+  num_heads:   8
+  mlp_ratio:   4.0
+  dropout:     0.1
+  embed_dim:   128
