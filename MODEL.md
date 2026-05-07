@@ -162,9 +162,39 @@ the model from over-relying on specific token positions. Disabled automatically 
 ---
 
 ## Transformer Encoder — `model/transformer.py`
-
-*To be documented — stack of 6 encoder blocks, each processing the full 197-token sequence.*
-
+ 
+All the complexity lives in `block.py`. `transformer.py` has a single responsibility:
+instantiate 6 independent `EncoderBlock` instances and apply them sequentially.
+ 
+**Why 6 blocks ?**
+Each block refines the token representations over increasingly abstract features.
+Early blocks capture low-level spatial relations between patches. Later blocks
+build identity-level representations. 6 is the standard depth for ViT-Tiny —
+deep enough to learn complex vehicle features, shallow enough to train from scratch
+on 52k images without overfitting.
+ 
+The forward pass is a simple sequential loop — the output of block $i$ is the
+input of block $i+1$, and the sequence shape `(B, 197, 192)` never changes:
+ 
+```mermaid
+flowchart LR
+    X["Input
+ B × 197 × 192"] --> B1
+    B1["Block 1
+EncoderBlock"] --> B2
+    B2["Block ...
+EncoderBlock"] --> B3
+    B3["Block 6
+EncoderBlock"] --> OUT["Output
+ B × 197 × 192"]
+ 
+    style X fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style B1 fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style B2 fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style B3 fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style OUT fill:#FCEBEB,stroke:#E24B4A,color:#501313
+```
+ 
 ---
 
 ## Multi-Head Self-Attention — `model/attention.py`
