@@ -1,12 +1,22 @@
 # Triplet Loss — `losses/triplet.py`
 
 ## Why not cross-entropy
-
-The challenge requires **retrieval** — given a query vehicle, find the same vehicle
-among 31 238 gallery images. Cross-entropy learns to predict a fixed set of classes.
-Here the 440 test identities are **never seen during training** — the model cannot
-memorize class labels.
-
+ 
+In classical ML, the loss is often grounded in **maximum likelihood estimation** —
+cross-entropy is the negative log-likelihood of a probabilistic model assigning
+the correct class. This works when there is a fixed, known set of classes and a
+natural probability distribution to maximize.
+ 
+Vehicle Re-ID has neither. The 440 test identities are **never seen during training**
+— the model cannot memorize class labels. More fundamentally, there is no natural
+probability distribution to model here. What we have instead is a **geometric
+constraint**: embeddings of the same vehicle must be closer together than embeddings
+of different vehicles.
+ 
+The triplet loss translates this constraint directly into a gradient signal —
+no probability, no class distribution, just distances in an embedding space.
+This is **metric learning**: learning a distance function rather than a classifier.
+ 
 What we need instead is a model that produces embeddings where:
 
 ```
