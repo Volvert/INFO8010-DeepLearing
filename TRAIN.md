@@ -2,148 +2,121 @@
 
 ## Overview
 
-`train.py` orchestrates the full training loop. It connects every component
-built so far — data, model, loss, optimizer and scheduler — into a single
-coherent pipeline that minimizes the triplet loss over 50 epochs.
-
-`main.py` calls `train_one_epoch()` once per epoch and handles checkpointing,
-evaluation scheduling and logging at the top level.
+`train.py` implements one training epoch. `main.py` calls `train_one_epoch()`
+in a loop over 50 epochs and handles checkpointing, evaluation and logging.
 
 ---
 
-## Full training flow
+## Architecture
+
+```mermaid
+flowchart LR
+    A["main.py"] -->|"calls once per epoch"| B["train_one_epoch()"]
+    B -->|"metrics dict"| A
+
+    SCH["utils/scheduler.py\nSequentialLR"] -->|"scheduler.step()"| B
+    OPT["AdamW\noptimizer"] -->|"optimizer.step()"| B
+    DL["data/dataloader.py\nPKSampler batch iterator"] -->|"64 images · 64 labels"| B
+    VIT["model/vit.py\nVehicleViT"] -->|"forward pass"| B
+    LOSS["losses/triplet.py\nBatchHardTripletLoss"] -->|"loss · active fraction"| B
+
+    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style B fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style SCH fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style OPT fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style DL fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style VIT fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style LOSS fill:#FCEBEB,stroke:#E24B4A,color:#501313
+```
+
+---
+
+## Batch loop — one epoch
 
 ```mermaid
 flowchart TD
-    A["main.py\nbuild_model · build_scheduler · AdamW"] --> B
+    START(["epoch start\nmodel.train()"]) --> LOOP
 
-    B["for epoch in range 50"] --> C
+    LOOP["for images, vehicle_ids in dataloader\n27 batches · 64 images each"] --> ZG
 
-    C["model.train()\nactivates dropout"] --> D
+    ZG["optimizer.zero_grad()\nclears gradients from previous batch"] --> FW
 
-    D["for batch in train_dataloader\n64 images · 64 labels\nPKSampler guarantees P×K structure"] --> E
+    FW["forward pass\nmodel images\n64 × 3 × 224 × 224  →  64 × 128"] --> TL
 
-    E["forward pass\nViT\n64 × 3 × 224 × 224  →  64 × 128"] --> F
+    TL["BatchHardTripletLoss\nembeddings · vehicle_ids\nmax 0 · d a p - d a n + 0.3"] --> BW
 
-    F["BatchHardTripletLoss\npairwise distances · mining\nhardest pos + hardest neg per anchor"] --> G
+    BW["loss.backward()\ncomputes ∂loss/∂θ\nfor every ViT parameter"] --> OS
 
-    G["loss.backward()\ncomputes gradients\nthrough all ViT parameters"] --> H
+    OS["optimizer.step()\nAdamW updates weights\nθ = θ - lr × gradient"] --> ACC
 
-    H["optimizer.step()\nAdamW updates weights\nθ = θ - lr × gradient"] --> I
+    ACC["accumulators\ntotal_loss += loss.item()\ntotal_active += active.item()"] --> CHK
 
-    I["optimizer.zero_grad()\nclears gradients\nfor next batch"] --> J
+    CHK{"more batches ?"} -->|"yes"| LOOP
+    CHK -->|"no"| SCH
 
-    J{"more batches ?"} -->|yes| D
-    J -->|no| K
+    SCH["scheduler.step()\nwarmup + cosine decay\nonce per epoch"] --> RET
 
-    K["scheduler.step()\nupdates global lr\nonce per epoch"] --> L
+    RET(["return dict\nloss · active_triplets · lr"])
 
-    L["monitoring\nlog loss · lr · active triplets"] --> M
-
-    M{"evaluate this epoch ?"} -->|yes| N
-    M -->|no| B
-
-    N["engine/evaluate.py\nRank-1 · mAP"] --> O
-    O["save checkpoint\nif best mAP"] --> B
-
-    style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
-    style B fill:#E1F5EE,stroke:#1D9E75,color:#085041
-    style C fill:#E1F5EE,stroke:#1D9E75,color:#085041
-    style D fill:#E6F1FB,stroke:#378ADD,color:#0C447C
-    style E fill:#E6F1FB,stroke:#378ADD,color:#0C447C
-    style F fill:#FCEBEB,stroke:#E24B4A,color:#501313
-    style G fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
-    style H fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
-    style I fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
-    style J fill:#FFF4E5,stroke:#E8A020,color:#7A4500
-    style K fill:#FFF4E5,stroke:#E8A020,color:#7A4500
-    style L fill:#FFF4E5,stroke:#E8A020,color:#7A4500
-    style M fill:#FFF4E5,stroke:#E8A020,color:#7A4500
-    style N fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
-    style O fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
+    style START fill:#E1F5EE,stroke:#1D9E75,color:#085041
+    style LOOP fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style ZG fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style FW fill:#E6F1FB,stroke:#378ADD,color:#0C447C
+    style TL fill:#FCEBEB,stroke:#E24B4A,color:#501313
+    style BW fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style OS fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
+    style ACC fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style CHK fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style SCH fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style RET fill:#E1F5EE,stroke:#1D9E75,color:#085041
 ```
 
 ---
 
-## Key steps explained
+## Key steps
 
 ### `model.train()`
-
-Switches the model to training mode. Two things change:
-- **Dropout is active** — 10% of activations are randomly zeroed
-- **BatchNorm** uses batch statistics (not used here but standard practice)
-
-At `model.eval()` during evaluation, dropout is disabled — embeddings are
-deterministic and reproducible for kNN retrieval.
-
-### Forward pass
-
-The full ViT pipeline produces one L2-normalized embedding per image:
-
-```
-(64, 3, 224, 224)   batch of images
-      ↓ patch_embed
-(64, 196, 192)      patch tokens
-      ↓ CLS + pos_embed + dropout
-(64, 197, 192)
-      ↓ transformer × 6
-(64, 197, 192)
-      ↓ CLS extraction + norm + proj_head + L2
-(64, 128)           embeddings ready for triplet loss
-```
-
-### BatchHardTripletLoss
-
-Receives `(embeddings, labels)` — computes the pairwise distance matrix,
-mines the hardest positive and hardest negative per anchor, returns the
-mean loss over the batch. A scalar — `loss.backward()` propagates gradients
-through the full computation graph back to every ViT parameter.
+Activates dropout — 10% of activations randomly zeroed at each forward pass.
+Disabled automatically at `model.eval()` for deterministic kNN embeddings.
 
 ### `optimizer.zero_grad()`
+PyTorch accumulates gradients by default. Without reset, gradients from batch
+$t$ accumulate into batch $t+1$ — weights are updated with corrupted information.
+Called **before** the forward pass, once per batch.
 
-PyTorch **accumulates** gradients by default — each `.backward()` call adds
-to existing gradients. `zero_grad()` resets them to zero before each batch
-so gradients from batch $t$ do not contaminate batch $t+1$.
+### Forward pass
+```
+(64, 3, 224, 224)  →  patch_embed  →  (64, 196, 192)
+                   →  CLS + pos_embed + dropout
+                   →  Transformer × 6
+                   →  CLS + norm + proj_head + L2
+                   →  (64, 128)   L2-normalized embeddings
+```
+
+### `BatchHardTripletLoss`
+Receives `embeddings (64, 128)` and `vehicle_ids (64,)`.
+Mines hardest positive and hardest negative per anchor within the batch.
+Returns `loss` (scalar) and `active` (fraction of non-zero triplets).
+`loss.backward()` propagates gradients through the full ViT graph.
+
+### `optimizer.step()`
+AdamW reads the gradients and updates all ViT weights:
+$$\theta_{t+1} = \theta_t - \frac{\gamma}{\sqrt{v_t}+\epsilon}m_t - \gamma\lambda\theta_t$$
+Uses the lr currently set by the scheduler.
 
 ### `scheduler.step()`
-
-Called **once per epoch**, after all batches — not after each batch.
-Updates the global learning rate according to the warmup + cosine schedule.
-Calling it inside the batch loop would make the lr decay 27× too fast
-(27 batches per epoch).
-
-### Checkpoint saving
-
-The model is saved when it achieves a new best mAP on the validation set.
-The checkpoint stores both the model weights and the optimizer state —
-the optimizer state contains the AdamW gradient history per parameter,
-which allows training to resume without losing momentum.
+Called **once per epoch**, after all batches — not inside the batch loop.
+27 batches per epoch — calling inside the loop would decay the lr 27× too fast.
 
 ---
 
-## What `train.py` exposes
+## Connections
 
-```
-train_one_epoch(model, dataloader, loss_fn, optimizer, device)
-    → dict : {loss: float, active_triplets: float, lr: float}
-```
-
-`main.py` calls `train_one_epoch()` in the epoch loop and handles
-checkpointing, evaluation frequency and early stopping at the top level.
-This separation keeps `train.py` focused on a single epoch and `main.py`
-in control of the global training strategy.
-
----
-
-## Connections to other modules
-
-| Module | Role in training |
+| Module | Role |
 |---|---|
-| `data/dataloader.py` | Provides the PKSampler-structured batch iterator |
-| `model/vit.py` | Forward pass — images to embeddings |
-| `losses/triplet.py` | Computes batch-hard triplet loss |
-| `utils/scheduler.py` | Built once in `main.py`, stepped once per epoch |
-| `engine/evaluate.py` | Called every N epochs to compute Rank-1 and mAP |
-| `monitoring/logger.py` | Receives loss, lr, active triplet fraction per epoch |
-| `monitoring/triplet_health.py` | Tracks active triplet fraction over training |
-| `monitoring/gradient_health.py` | Detects vanishing or exploding gradients |
+| `data/dataloader.py` | PKSampler batch iterator — 27 batches × 64 images |
+| `model/vit.py` | Forward pass — images to L2-normalized embeddings |
+| `losses/triplet.py` | Batch-hard triplet loss — loss + active fraction |
+| `utils/scheduler.py` | Built in `main.py`, stepped once per epoch |
+| `engine/evaluate.py` | Called by `main.py` every N epochs |
+| `monitoring/` | Logger, triplet health, gradient health |
