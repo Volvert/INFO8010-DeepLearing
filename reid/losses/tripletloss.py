@@ -64,4 +64,5 @@ class BatchHardTripletLoss(nn.Module):
         triplet_loss = torch.clamp(hardest_pos_dists - hardest_neg_dists + self.margin, min=0)
 
         # Step 7: mean over batch
-        return triplet_loss.mean()
+        active_fraction = (triplet_loss > 0).float().mean()
+        return triplet_loss.mean(), active_fraction
