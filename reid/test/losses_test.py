@@ -85,7 +85,7 @@ def test_neg_mask_excludes_diagonal(loss_fn):
     """
     embeddings = torch.zeros(8, 128)
     for i in range(8):
-        embeddings[i, i % 4] = 1.0   # 4 orthogonal directions
+        embeddings[i, i // 2] = 1.0   # 4 orthogonal directions
     embeddings = F.normalize(embeddings, dim=-1)
     labels = torch.tensor([0, 0, 1, 1, 2, 2, 3, 3])
 

@@ -216,12 +216,16 @@ class Logger:
             if v != v: return _d(f"{'—':>8}")
             return (_g if v >= BASELINE_MAP else _y)(f"{v:8.4f}")
 
+        # précalcul
+        lr_str = f"{lr:>10.2e}" if lr == lr else f"{'nan':>10}"
+        t_str  = f"{t:>8.1f}"   if t  == t  else f"{'nan':>8}"
+
         print(
             f"{row['epoch']+1:3d}/{self.total_epochs}  "
             f"{_loss(loss)}  {_active(active)}  "
-            f"{lr:.2e if lr==lr else '       nan':>10}  "
+            f"{lr_str}  "
             f"{_metric(rank1)}  {_metric(mAP)}  "
-            f"{t:8.1f if t==t else 'nan':>8}  "
+            f"{t_str}  "
             f"{_c(_b('★ best')) if self._is_best else '      '}"
         )
 

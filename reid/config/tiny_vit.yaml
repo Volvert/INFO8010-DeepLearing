@@ -40,14 +40,14 @@ data:
   #   <real_root>/train_label.xml
   #   <real_root>/query_label.xml
   #   <real_root>/test_label.xml
-  real_root: dataset/AICity21_Track2_ReID
+  real_root: /home/fvolvert/datasets/AICity21_Track2_ReID
 
   # Synthetic VehicleX dataset
   # Set to null to train on real data only (no merge)
   # expected layout:
   #   <synthetic_root>/sys_image_train/   synthetic training images
   #   <synthetic_root>/train_label.xml
-  synthetic_root: dataset/AICity21_Track2_ReID_Simulation
+  synthetic_root: /home/fvolvert/datasets/AICity21_Track2_ReID_Simulation
 
   # PKSampler batch structure: P identities × K images = batch_size
   P: 16   # identities per batch
