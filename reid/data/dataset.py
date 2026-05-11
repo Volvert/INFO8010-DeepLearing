@@ -1,20 +1,62 @@
 # =============================================================================
-# VehicleReIDDataset
+# dataset.py
 # =============================================================================
 """
-This file is the entry point for all data in the project.
-Its only job is to read the XML annotation file and the image folder,
-and expose a standard PyTorch Dataset interface so that the DataLoader
-can feed batches to the model during training and evaluation.
+Defines two dataset classes used throughout the project:
 
-PyTorch expects every dataset to implement three methods:
-  __init__    -> called once when you create the dataset object
-  __len__     -> called when PyTorch needs to know how many samples exist
-  __getitem__ -> called thousands of times during training, once per sample
+  VehicleReIDDataset — loads one split (train / query / test) from XML + images
+  MergedDataset      — combines real + synthetic train sets for PKSampler
 
-See PyTorch Dataset docs: https://docs.pytorch.org/tutorials/beginner/basics/data_tutorial.html
+--- VehicleReIDDataset ---
 
-See PIL Image docs: https://pillow.readthedocs.io/en/stable/
+Reads the XML annotation file and image folder, exposes the standard
+PyTorch Dataset interface (.__len__, .__getitem__).
+
+Compatible with both XML formats in the project:
+  Real      (gb2312) : <Item imageName="000001.jpg" vehicleID="0269" cameraID="c026" />
+  Synthetic (utf-8)  : <Item imageName="00001_c006_1.jpg" vehicleID="0001" cameraID="c006"
+                             colorID="10" typeID="10" orientation="266.1" ... />
+
+Extra attributes in the synthetic XML (colorID, typeID, orientation, etc.)
+are silently ignored — xml.etree only reads what you ask for.
+
+The id_offset parameter shifts all vehicle IDs at parse time:
+  real      = VehicleReIDDataset(..., id_offset=0)            IDs : 1 – 440
+  synthetic = VehicleReIDDataset(..., id_offset=max(real.labels))  IDs : 441 – 1802
+
+This eliminates ID collisions before the datasets are combined.
+
+--- MergedDataset ---
+
+Concatenates one real and one synthetic VehicleReIDDataset into a single
+Dataset that exposes a flat .labels list — required by PKSampler.
+
+torch.utils.data.ConcatDataset would work for __getitem__ routing but does
+NOT expose .labels, which PKSampler needs to group images by identity.
+MergedDataset fills that gap with minimal code.
+
+Typical usage in main.py:
+
+    real      = VehicleReIDDataset(
+                    root      = "dataset/AIC21_Track2_ReID/image_train",
+                    label_xml = "dataset/AIC21_Track2_ReID/train_label.xml",
+                    transform = get_train_transform(),
+                    id_offset = 0,
+                )
+
+    synthetic = VehicleReIDDataset(
+                    root      = "dataset/AIC21_Track2_ReID_Simulation/sys_image_train",
+                    label_xml = "dataset/AIC21_Track2_ReID_Simulation/train_label.xml",
+                    transform = get_train_transform(),
+                    id_offset = max(real.labels),   # 440 → synthetic becomes 441-1802
+                )
+
+    train = MergedDataset(real, synthetic)
+    # train.labels  : 244 867 entries, IDs 1-1802, no collision
+    # len(train)    : 244 867
+
+See: data/batch.py      — PKSampler reads dataset.labels
+See: data/dataloader.py — get_train_dataloader passes dataset to PKSampler
 """
 
 import os
@@ -23,65 +65,81 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
+# =============================================================================
+# VehicleReIDDataset
+# =============================================================================
+
 class VehicleReIDDataset(Dataset):
     """
-    Loads vehicle images and their labels from the AIC21 Track2 dataset.
+    Loads vehicle images and their labels from an AIC21-format dataset.
     Returns (image_tensor, vehicle_id, camera_id) for each sample.
 
     Attributes:
-        samples : list of (img_path, vehicle_id, camera_id)
-                  one entry per image — the core data structure of this file
-        labels  : list of vehicle_id parallel to samples
-                  self.labels[i] is always the vehicle_id of self.samples[i]
-                  used by PKSampler in batch.py to group images by identity
+        root      : str  — path to image directory
+        transform : callable | None — torchvision transform pipeline
+        samples   : list of (img_path, vehicle_id, camera_id)
+        labels    : list of vehicle_id — parallel to samples
+                    read by PKSampler to build P×K identity batches
     """
 
-    def __init__(self, root: str, label_xml: str, transform=None):
+    def __init__(
+        self,
+        root:      str,
+        label_xml: str,
+        transform = None,
+        id_offset: int = 0,
+    ):
         """
         Args:
-            root      : path to image folder
+            root      : path to the image folder
                         e.g. "dataset/AIC21_Track2_ReID/image_train"
-            label_xml : path to XML annotation file
+            label_xml : path to the XML annotation file
                         e.g. "dataset/AIC21_Track2_ReID/train_label.xml"
-            transform : callable transform pipeline from data_transforms.py
-                        get_train_transform() for training
-                        get_test_transform()  for query and test
+            transform : transform pipeline — get_train_transform() for train,
+                        get_test_transform() for query and gallery
+            id_offset : integer added to every vehicle_id at parse time.
+                        default 0 for real data (IDs unchanged).
+                        pass max(real.labels) for synthetic data to avoid
+                        ID collisions when both datasets are merged.
         """
-        self.root = root
+        self.root      = root
         self.transform = transform
-        self.samples = []
-        self.labels  = []
+        self.id_offset = id_offset
+        self.samples: list[tuple[str, int, int]] = []
+        self.labels:  list[int]                  = []
 
         self._parse_xml(label_xml)
 
     # =========================================================================
     # _parse_xml
     # =========================================================================
-    """
-    Only place where the XML file is read.
-    Extracts filename, vehicle_id and camera_id for each image.
-    Builds self.samples and self.labels in one pass.
-
-    camera_id is stored because at evaluation time:
-      same vehicle + different camera = true positive  (counted)
-      same vehicle + same camera      = ignored        (not counted)
-    """
 
     def _parse_xml(self, label_xml: str) -> None:
         """
-        Parses the XML annotation file and populates self.samples and
-        self.labels. Called once in __init__.
+        Reads the XML annotation file and populates self.samples and self.labels.
 
-        After this method returns:
-          len(self.samples) == len(self.labels) == total number of images
+        Called once in __init__. After this method returns:
+            len(self.samples) == len(self.labels) == number of images in the split.
+
+        The id_offset is added to vehicle_id here — at the source — so that
+        all downstream code (PKSampler, BatchHardTripletLoss, MergedDataset)
+        sees correct, non-colliding IDs without any extra logic.
+
+        Args:
+            label_xml : path to XML file (real or synthetic format)
         """
         tree = ET.parse(label_xml)
         root = tree.getroot()
 
-        for item in root.iter('Item'):
-            name = item.get('imageName')           # "000001.jpg"
-            vehicle_id = int(item.get('vehicleID', -1))  # -1 si absent (query/test)
-            camera_id = int(item.get('cameraID')[1:])   # "c036" → 36
+        for item in root.iter("Item"):
+
+            name = item.get("imageName")                    # "000001.jpg" or "00001_c006_1.jpg"
+
+            vehicle_id = int(item.get("vehicleID", -1))    # "0269" → 269
+            vehicle_id += self.id_offset                   # 269 + 0 = 269  (real)
+                                                           # 1   + 440 = 441 (synthetic)
+
+            camera_id = int(item.get("cameraID")[1:])      # "c036" → 36
 
             img_path = os.path.join(self.root, name)
 
@@ -91,75 +149,132 @@ class VehicleReIDDataset(Dataset):
     # =========================================================================
     # __len__
     # =========================================================================
-    """
-    Called by PyTorch DataLoader to know the total number of samples.
-    Used to determine when one full epoch is complete.
-    """
 
     def __len__(self) -> int:
-        """Returns the total number of images in the dataset."""
+        """Total number of images in this split."""
         return len(self.samples)
 
     # =========================================================================
     # __getitem__
     # =========================================================================
-    """
-    Called by PyTorch DataLoader thousands of times during training.
-    Loads one image from disk, applies transforms, returns it with labels.
-
-    try/except prevents a single corrupted image from crashing training.
-    Falls back to the next sample if the image cannot be opened.
-    """
 
     def __getitem__(self, idx: int):
         """
-        Loads one image from disk and returns it with its labels.
+        Loads one image and returns it with its labels.
+
+        Falls back to the next sample if the image file is corrupted or missing,
+        so that a single bad file never crashes a training run.
 
         Returns:
-            image : torch.Tensor of shape (3, H, W) or a simple image PIL Image
-            vehicle_id   : int — which vehicle is this
-            camera_id    : int — which camera captured this image
+            image      : torch.Tensor (3, H, W) after transform, else PIL Image
+            vehicle_id : int — identity label (offset already applied)
+            camera_id  : int — camera index
         """
         img_path, vehicle_id, camera_id = self.samples[idx]
+
         try:
-            image = Image.open(img_path).convert('RGB')
+            image = Image.open(img_path).convert("RGB")
         except Exception:
-            print(f"Warning: failed to load image {img_path}. Skipping.")
             return self.__getitem__((idx + 1) % len(self.samples))
-          
-        # transform is always set in practice (get_train_transform / get_test_transform)
-        # None only when instantiating the dataset manually for debugging
+
         if self.transform is not None:
             image = self.transform(image)
 
         return image, vehicle_id, camera_id
 
     # =========================================================================
-    # __repr__
+    # get_num_identities / __repr__
     # =========================================================================
-    """
-    Called when you do print(dataset).
-    Useful for sanity checks after loading — verify image count and
-    identity count match the expected dataset size.
-    """
+
+    def get_num_identities(self) -> int:
+        """Number of unique vehicle identities in this split."""
+        return len(set(self.labels))
 
     def __repr__(self) -> str:
         return (
-            f"VehicleReIDDataset\n"
-            f"  images     : {len(self.samples)}\n"
-            f"  identities : {self.get_num_identities()}\n"
-            f"  root       : {self.root}"
+            f"VehicleReIDDataset("
+            f"images={len(self.samples)}, "
+            f"identities={self.get_num_identities()}, "
+            f"offset={self.id_offset})"
         )
 
-    # =========================================================================
-    # get_num_identities
-    # =========================================================================
+
+# =============================================================================
+# MergedDataset
+# =============================================================================
+
+class MergedDataset(Dataset):
     """
-    Utility method — returns the number of unique vehicle identities.
-    Used in __repr__ and to sanity-check the dataset after loading.
+    Concatenates a real and a synthetic VehicleReIDDataset into one Dataset.
+
+    Both datasets must already have non-colliding vehicle IDs — apply id_offset
+    when instantiating the synthetic VehicleReIDDataset, not here.
+
+    The only job of this class is to:
+        1. expose a flat .labels list → required by PKSampler
+        2. route __getitem__ to the correct sub-dataset
+
+    Attributes:
+        real      : VehicleReIDDataset — real training split
+        synthetic : VehicleReIDDataset — synthetic training split
+        labels    : list[int] — concatenation of both .labels lists
+        _n_real   : int — length of real dataset (boundary for __getitem__ routing)
     """
 
-    def get_num_identities(self) -> int:
-        """Returns the number of unique vehicle identities in the dataset."""
-        
-        return len(set(self.labels))
+    def __init__(
+        self,
+        real:      VehicleReIDDataset,
+        synthetic: VehicleReIDDataset,
+    ):
+        """
+        Args:
+            real      : VehicleReIDDataset loaded with id_offset=0
+            synthetic : VehicleReIDDataset loaded with id_offset=max(real.labels)
+        """
+        self.real      = real
+        self.synthetic = synthetic
+        self._n_real   = len(real)
+
+        # flat label list — what PKSampler reads
+        # real labels stay as-is, synthetic labels already have the offset
+        self.labels = real.labels + synthetic.labels
+
+    # =========================================================================
+    # __len__
+    # =========================================================================
+
+    def __len__(self) -> int:
+        """Total images across both datasets."""
+        return len(self.real) + len(self.synthetic)
+
+    # =========================================================================
+    # __getitem__
+    # =========================================================================
+
+    def __getitem__(self, idx: int):
+        """
+        Routes idx to the correct sub-dataset.
+
+        Indices 0 … n_real-1          → real dataset
+        Indices n_real … n_real+n_syn-1 → synthetic dataset
+
+        Returns:
+            (image, vehicle_id, camera_id) — same tuple as VehicleReIDDataset
+        """
+        if idx < self._n_real:
+            return self.real[idx]
+        else:
+            return self.synthetic[idx - self._n_real]
+
+    # =========================================================================
+    # __repr__
+    # =========================================================================
+
+    def __repr__(self) -> str:
+        return (
+            f"MergedDataset("
+            f"real={len(self.real)}, "
+            f"synthetic={len(self.synthetic)}, "
+            f"total={len(self)}, "
+            f"identities={len(set(self.labels))})"
+        )

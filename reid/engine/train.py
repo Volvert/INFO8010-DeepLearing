@@ -1,91 +1,218 @@
 # =============================================================================
-# train
+# train.py — One Epoch Training Loop
 # =============================================================================
 """
-This file implements the training loop for one epoch.
-main.py calls train in a loop over all epochs and handles
-checkpointing, evaluation frequency and logging at the top level.
+Single responsibility: run one full epoch of training and return all metrics.
 
-One epoch iterates over all batches from the PKSampler-structured DataLoader.
-Each batch contains exactly P=16 identities × K=4 images = 64 images.
+main.py calls train_one_epoch() and receives one comprehensive dict.
+It never touches the batch loop directly.
 
-For each batch:em
-  1. forward pass : ViT maps (64, 3, 224, 224) -> (64, 128) L2-normalized embeddings
-  2. triplet loss : batch-hard mining + loss = max(0, d(a,p) - d(a,n) + margin)
-  3. backward : loss.backward() computes gradients through all ViT parameters
-  4. optimizer step : AdamW updates weights — θ = θ - lr × gradient
-  5. zero_grad : clears gradients before the next batch
+What happens inside one epoch:
+    For each batch (P=16 identities × K=4 images = 64 images):
+        1. zero_grad          — clear previous gradients
+        2. forward            — images → (B, 128) L2-normalized embeddings
+        3. triplet_monitor    — compute d(a,p), d(a,n), gap BEFORE backward
+        4. loss               — batch-hard triplet loss + active fraction
+        5. backward           — fill .grad on all parameters
+        6. grad_monitor       — read .grad norms AFTER backward, BEFORE step
+        7. clip               — clip if grad_exploding detected
+        8. step               — AdamW weight update
+        9. accumulate         — sum loss + active for epoch average
 
-After all batches:
-  6. scheduler step : updates the global lr once per epoch (warmup + cosine decay)
-  7. monitoring : logs loss, lr, active triplet fraction
+    After all batches:
+        10. epoch averages    — mean loss, mean active fraction
+        11. triplet average   — TripletHealthMonitor.epoch_average()
+        12. return dict       — all metrics in one flat dict
 
-train_one_epoch() returns a dict of metrics consumed by main.py:
-  {
-    "loss" : float  — mean triplet loss over the epoch
-    "active_triplets" : float  — fraction of non-zero triplets [0, 1]
-    "lr" : float  — current learning rate after scheduler.step()
-  }
+Return dict keys:
 
-See: losses/tripletloss.py — BatchHardTripletLoss
-See: utils/scheduler.py — build_scheduler
-See: monitoring/logger.py — metric logging
-See: engine/evaluate.py — called by main.py after each epoch
-See: https://docs.pytorch.org/tutorials/beginner/introyt/trainingyt.html
+    Core (always present):
+        "loss"               : float — mean triplet loss over the epoch
+        "active_triplets"    : float — mean active triplet fraction [0, 1]
+        "lr"                 : float — learning rate BEFORE scheduler.step()
+
+    Triplet health (th_* prefix, present when triplet_monitor is not None):
+        "th_active_fraction" : float
+        "th_mean_d_pos"      : float
+        "th_mean_d_neg"      : float
+        "th_gap"             : float
+        "th_d_pos_std"       : float
+        "th_d_neg_std"       : float
+        "th_collapse"        : bool
+
+    Gradient health (grad_* prefix, present when grad_monitor is not None):
+        "grad_norm_global"      : float
+        "grad_norm_patch_embed" : float
+        "grad_norm_blocks.0"    : float  (through blocks.5)
+        ...
+        "grad_norm_proj_head"   : float
+        "grad_vanishing"        : bool
+        "grad_exploding"        : bool
+
+See: monitoring/gradient_health.py — GradientHealthMonitor
+See: monitoring/triplet_health.py  — TripletHealthMonitor
+See: losses/tripletloss.py         — BatchHardTripletLoss
+See: main.py                       — calls this function once per epoch
 """
 
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
+
 from losses.tripletloss import BatchHardTripletLoss
-from monitoring.logger import Logger
+from monitoring.gradient_health import GradientHealthMonitor
+from monitoring.triplet_health  import TripletHealthMonitor
 
 
 def train_one_epoch(
-    model: torch.nn.Module, # VehicleViT in train mode
-    dataloader: DataLoader, # PKSampler-structured train dataloader
-    loss_fn: BatchHardTripletLoss, # batch-hard triplet loss
-    optimizer: torch.optim.Optimizer,# AdamW
-    device: torch.device, # GPU if available, else CPU
+    model:           nn.Module,
+    dataloader:      DataLoader,
+    loss_fn:         BatchHardTripletLoss,
+    optimizer:       torch.optim.Optimizer,
+    device:          torch.device,
+    margin:          float = 0.3,
+    grad_monitor:    GradientHealthMonitor | None = None,
+    triplet_monitor: TripletHealthMonitor  | None = None,
 ) -> dict:
     """
-    Runs one full epoch over the training set.
+    Runs one full training epoch and returns all metrics in a flat dict.
 
     Args:
-        model      : VehicleViT — called with model.train() before the loop
-        dataloader : yields (image_tensor, vehicle_id, camera_id) batches
-                     PKSampler guarantees P×K structure — required by triplet loss
-        loss_fn    : BatchHardTripletLoss instance
-        optimizer  : AdamW optimizer — stepped once per batch
-        device     : torch.device — tensors moved here before forward pass
+        model           : VehicleViT — set to train mode internally
+        dataloader      : PKSampler DataLoader — yields (images, vehicle_ids, camera_ids)
+        loss_fn         : BatchHardTripletLoss instance
+        optimizer       : AdamW optimizer
+        device          : torch.device — GPU or CPU
+        margin          : triplet loss margin, passed to triplet_monitor (default 0.3)
+        grad_monitor    : GradientHealthMonitor — pass None to disable gradient logging
+        triplet_monitor : TripletHealthMonitor  — pass None to disable triplet logging
 
     Returns:
-        dict : {
-            "loss"            : mean triplet loss over all batches,
-            "active_triplets" : fraction of non-zero triplets in [0, 1],
-            "lr"              : current learning rate after the epoch
-        }
+        dict — see module docstring for full list of keys
     """
-    model.train()  # set model to training mode
-    total_loss = 0.0
-    total_active_triplets = 0
-    num_batches = 0
+
+    # =========================================================================
+    # Setup
+    # =========================================================================
+
+    model.train()  # activates Dropout and training-mode BatchNorm
+
+    n_batches = len(dataloader)
+
+    # running accumulators — summed over batches, divided at epoch end
+    total_loss   = 0.0
+    total_active = 0.0
+
+    # per-batch triplet health dicts — averaged at epoch end
+    batch_triplet_metrics: list[dict] = []
+
+    # last valid gradient metrics from the epoch — kept for logging
+    # (only updated when grad_monitor is not None and batch is not skipped)
+    last_grad_metrics: dict = {}
+
+    # =========================================================================
+    # Batch loop
+    # =========================================================================
 
     for images, vehicle_ids, _ in dataloader:
-        images , vehicle_ids = images.to(device), vehicle_ids.to(device)
-        optimizer.zero_grad()  # clear gradients before the forward pass
-        embeddings = model(images)  # forward pass: (B, 3, 224, 224) -> (B, 128)
-        loss , active = loss_fn(embeddings, vehicle_ids)  # compute batch-hard triplet loss
-        loss.backward()  # backward pass: compute gradients
-        optimizer.step()  # update weights with AdamW
-        total_loss += loss.item()  # accumulate loss for monitoring
-        total_active_triplets += active.item()  # accumulate active triplet fraction
-        num_batches += 1
 
-    mean_loss = total_loss / num_batches
-    active_triplet_fraction = total_active_triplets / num_batches
+        # ------------------------------------------------------------------
+        # Move to device (CPU → GPU)
+        # ------------------------------------------------------------------
+        images      = images.to(device)
+        vehicle_ids = vehicle_ids.to(device)
 
-    return {
-        "loss": mean_loss,
-        "active_triplets": active_triplet_fraction,
-        "lr": optimizer.param_groups[0]['lr']
-        }
+        # ------------------------------------------------------------------
+        # Step 1 — zero_grad
+        # PyTorch accumulates gradients by default. Without this, gradients
+        # from the previous batch would add to the current batch's gradients,
+        # corrupting the weight update.
+        # ------------------------------------------------------------------
+        optimizer.zero_grad()
+
+        # ------------------------------------------------------------------
+        # Step 2 — forward pass
+        # images : (B, 3, 224, 224)  →  embeddings : (B, 128) L2-normalized
+        # ------------------------------------------------------------------
+        embeddings = model(images)
+
+        # ------------------------------------------------------------------
+        # Step 3 — triplet health BEFORE backward
+        # The distance matrix is computed from embeddings here.
+        # Must be called before backward() because we need the embeddings
+        # in their current form (detached from the graph — no gradient needed).
+        # ------------------------------------------------------------------
+        if triplet_monitor is not None:
+            th = triplet_monitor.compute(
+                embeddings.detach(),  # detach: monitoring must not affect gradients
+                vehicle_ids,
+                margin=margin,
+            )
+            batch_triplet_metrics.append(th)
+
+        # ------------------------------------------------------------------
+        # Step 4 — triplet loss
+        # Returns loss (scalar) and active (fraction of non-zero triplets).
+        # ------------------------------------------------------------------
+        loss, active = loss_fn(embeddings, vehicle_ids)
+
+        # ------------------------------------------------------------------
+        # Step 5 — backward
+        # Computes and stores gradients in each parameter's .grad attribute.
+        # This is the only moment when .grad is populated and readable.
+        # ------------------------------------------------------------------
+        loss.backward()
+
+        # ------------------------------------------------------------------
+        # Step 6 — gradient health AFTER backward, BEFORE step
+        # .grad is filled — this is the ONLY valid window to read it.
+        # After optimizer.step() it is stale; after zero_grad() it is zero.
+        # ------------------------------------------------------------------
+        if grad_monitor is not None:
+            gm = grad_monitor.compute(model)
+            if not gm.get("grad_skipped"):
+                last_grad_metrics = gm
+
+        # ------------------------------------------------------------------
+        # Step 7 — gradient clipping (conditional)
+        # Only triggered when the monitor detects an explosion (norm > 10).
+        # clip_grad_norm_ rescales ALL gradients so the global norm = max_norm.
+        # This must happen AFTER backward() and BEFORE step().
+        # ------------------------------------------------------------------
+        if last_grad_metrics.get("grad_exploding"):
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+
+        # ------------------------------------------------------------------
+        # Step 8 — optimizer step
+        # AdamW reads the .grad values and updates all weights.
+        # θ_{t+1} = θ_t - lr * (m_t / sqrt(v_t) + ε) - lr * λ * θ_t
+        # ------------------------------------------------------------------
+        optimizer.step()
+
+        # ------------------------------------------------------------------
+        # Step 9 — accumulate
+        # ------------------------------------------------------------------
+        total_loss   += loss.item()   # .item() converts 0-d GPU tensor → Python float
+        total_active += active.item()
+
+    # =========================================================================
+    # Epoch aggregation
+    # =========================================================================
+
+    # core metrics — averaged over all batches
+    train_metrics = {
+        "loss":            total_loss   / n_batches,
+        "active_triplets": total_active / n_batches,
+        "lr":              optimizer.param_groups[0]["lr"],
+    }
+
+    # triplet health — epoch average across all batches
+    if triplet_monitor is not None and batch_triplet_metrics:
+        epoch_triplet = TripletHealthMonitor.epoch_average(batch_triplet_metrics)
+        train_metrics.update(epoch_triplet)  # merges th_* keys into the dict
+
+    # gradient health — last batch's metrics (representative of end-of-epoch state)
+    if last_grad_metrics:
+        train_metrics.update(last_grad_metrics)  # merges grad_* keys
+
+    return train_metrics

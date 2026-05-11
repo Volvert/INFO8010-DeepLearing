@@ -1,11 +1,80 @@
-# ViT-Tiny architecture defaults
+# =============================================================================
+# tiny_vit.yaml — Central project configuration
+# =============================================================================
+# All configuration lives here. Never edit main.py to change an experiment
+# — edit this file instead.
+#
+# Sections:
+#   model      — ViT architecture hyperparameters
+#   data       — dataset paths and batch structure
+#   training   — optimiser and schedule hyperparameters
+#   monitoring — logging and evaluation frequencies
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Model architecture
+# Passed directly to VehicleViT(**cfg["model"])
+# -----------------------------------------------------------------------------
 model:
-  img_size:    224
-  patch_size:  16
-  in_channels: 3
-  d_model:     192
-  depth:       6
-  num_heads:   8
-  mlp_ratio:   4.0
-  dropout:     0.1
-  embed_dim:   128
+  img_size:    224      # input image size (H = W)
+  patch_size:  16       # patch size → 224/16 = 14×14 = 196 patches per image
+  in_channels: 3        # RGB
+  d_model:     192      # Transformer internal dimension (ViT-Tiny width)
+  depth:       6        # number of EncoderBlocks
+  num_heads:   8        # attention heads per block  (192/8 = 24 dims per head)
+  mlp_ratio:   4.0      # FFN hidden dim = 4 × d_model = 768
+  dropout:     0.1      # dropout in FFN and attention weights
+  embed_dim:   128      # proj_head output dimension (embedding space)
+
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  # Real AIC21 Track2 dataset
+  # expected layout:
+  #   <real_root>/image_train/     training images
+  #   <real_root>/image_query/     query images  (evaluation)
+  #   <real_root>/image_test/      gallery images (evaluation)
+  #   <real_root>/train_label.xml
+  #   <real_root>/query_label.xml
+  #   <real_root>/test_label.xml
+  real_root: dataset/AICity21_Track2_ReID
+
+  # Synthetic VehicleX dataset
+  # Set to null to train on real data only (no merge)
+  # expected layout:
+  #   <synthetic_root>/sys_image_train/   synthetic training images
+  #   <synthetic_root>/train_label.xml
+  synthetic_root: dataset/AICity21_Track2_ReID_Simulation
+
+  # PKSampler batch structure: P identities × K images = batch_size
+  P: 16   # identities per batch
+  K: 4    # images per identity  →  batch size = 64
+
+  num_workers: 4   # CPU workers for image loading
+
+  eval_batch_size: 128
+
+
+# -----------------------------------------------------------------------------
+# Training hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  epochs:        50
+  lr:            1.0e-4   # peak learning rate (after warmup)
+  weight_decay:  0.01     # AdamW weight decay (decoupled from gradient)
+  warmup_epochs: 5        # linear warmup epochs  0 → lr
+  margin:        0.3      # triplet loss margin  (≈ 17° on unit hypersphere)
+  resume:        null     # path to checkpoint to resume from, null = train from scratch
+
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  run_name:   run_001   # experiment name → outputs saved to runs/<run_name>/
+  runs_dir:   runs      # root directory for all run outputs
+  eval_every: 5         # run evaluate() every N epochs (gallery = 31 238 images)
+  grad_every: 1         # compute gradient norms every N batches

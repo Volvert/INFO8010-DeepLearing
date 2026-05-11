@@ -2,32 +2,77 @@
 # Transformer
 # =============================================================================
 """
-This file stacks depth identical EncoderBlock instances in sequence.
-Each block applies attention + skip, then FFN + skip.
+Stacks depth identical EncoderBlock instances in sequence.
 
-The sequence shape (B, 197, 192) is preserved through all 6 blocks —
-each block enriches the token representations without changing the shape.
+Each block applies attention + skip, then FFN + skip.
+The sequence shape is preserved through all blocks — each block enriches
+the token representations without changing the tensor dimensions.
 
 Input  : (B, seq_len, d_model)   e.g. (64, 197, 192)
 Output : (B, seq_len, d_model)   e.g. (64, 197, 192)
 
 See: model/block.py — EncoderBlock
-nn.ModuleList -> https://docs.pytorch.org/docs/2.11/generated/torch.nn.ModuleList.html
-nn.LayerNorm -> https://docs.pytorch.org/docs/2.11/generated/torch.nn.LayerNorm.html
-nn.GELU -> https://docs.pytorch.org/docs/2.11/generated/torch.nn.GELU.html
+See: nn.ModuleList  — https://docs.pytorch.org/docs/2.11/generated/torch.nn.ModuleList.html
 """
 
+import torch
 import torch.nn as nn
 from model.block import EncoderBlock
 
+
 class Transformer(nn.Module):
-    def __init__(self, depth=6, d_model=192, num_heads=8, mlp_ratio=4.0, attn_drop=0.0, drop=0.0):
+    """
+    Stack of depth EncoderBlock instances.
+
+    nn.ModuleList is used instead of a plain Python list so that PyTorch
+    registers all blocks as submodules — their parameters appear in
+    model.parameters() and are moved to GPU with model.to(device).
+
+    Input  : (B, seq_len, d_model)   e.g. (64, 197, 192)
+    Output : (B, seq_len, d_model)   same shape
+
+    Attributes:
+        blocks : nn.ModuleList of depth EncoderBlock instances
+    """
+
+    def __init__(
+        self,
+        depth:     int   = 6,
+        d_model:   int   = 192,
+        num_heads: int   = 8,
+        mlp_ratio: float = 4.0,
+        dropout:   float = 0.1,
+    ):
+        """
+        Args:
+            depth     : number of stacked EncoderBlocks
+            d_model   : token dimension throughout all blocks
+            num_heads : attention heads per block
+            mlp_ratio : FFN hidden dim = d_model * mlp_ratio
+            dropout   : dropout applied in attention and FFN of every block
+        """
         super().__init__()
+
         self.blocks = nn.ModuleList([
-            EncoderBlock(d_model, num_heads, mlp_ratio, attn_drop, drop)
+            EncoderBlock(
+                d_model   = d_model,
+                num_heads = num_heads,
+                mlp_ratio = mlp_ratio,
+                dropout   = dropout,
+            )
             for _ in range(depth)
         ])
-    def forward(self, x):
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Passes the token sequence through all encoder blocks sequentially.
+
+        Args:
+            x : (B, seq_len, d_model) — token sequence from PatchEmbedding
+
+        Returns:
+            x : (B, seq_len, d_model) — same shape, enriched representations
+        """
         for block in self.blocks:
-            x = block(x)  # (B, seq_len, d_model) — same shape through all blocks
+            x = block(x)
         return x

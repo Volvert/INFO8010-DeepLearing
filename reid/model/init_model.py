@@ -1,59 +1,56 @@
 # =============================================================================
-# build_model
+# init_model.py — Model builder
 # =============================================================================
 """
-This file is the single entry point for model instantiation.
-It reads the yaml config, builds VehicleViT, optionally loads a checkpoint,
-and moves the model to the available device.
+Single entry point for model instantiation.
 
-train.py and evaluate.py call build_model() and receive a ready-to-use model.
-They never instantiate VehicleViT directly.
+Receives the model config dict and device from main.py — never reads
+the YAML itself. This keeps the YAML parsing in one place (main.py)
+and makes build_model() easier to test in isolation.
 
 build_model workflow:
-  1. load config    : read config/tiny_vit.yaml -> dict
-  2. instantiate    : VehicleViT(**config) 
-  3. load weights   : load checkpoint if checkpoint_path is provided
-  4. device         : move model to GPU if available, else CPU
-  5. return         : model ready for training or evaluation
+  1. instantiate  : VehicleViT(**model_cfg)
+  2. load weights : load checkpoint if checkpoint_path is provided
+  3. device       : move model to device
+  4. return       : model ready for training or evaluation
 
-See: model/vit.py — VehicleViT
-See: config/tiny_vit.yaml — architecture hyperparameters
+See: model/vit.py        — VehicleViT
+See: config/tiny_vit.yaml — cfg["model"] section passed by main.py
 """
 
 import torch
-import yaml
 from model.vit import VehicleViT
 
 
 def build_model(
-    config_path:     str = "config/tiny_vit.yaml",
-    checkpoint_path: str = None,
+    model_cfg:       dict,
+    device:          torch.device,
+    checkpoint_path: str | None = None,
 ) -> VehicleViT:
     """
     Builds and returns a VehicleViT model ready for training or evaluation.
 
     Args:
-        config_path     : path to the yaml config file
-        checkpoint_path : path to a saved checkpoint — None trains from scratch
+        model_cfg       : dict — cfg["model"] from tiny_vit.yaml
+                          passed directly to VehicleViT(**model_cfg)
+        device          : torch.device — GPU or CPU, detected once in main.py
+        checkpoint_path : path to a saved checkpoint — None = train from scratch
 
     Returns:
-        model : VehicleViT on the available device (GPU if available, else CPU)
+        model : VehicleViT moved to device, ready for .train() or .eval()
     """
-    # 1. load config
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
 
-    # 2. instantiate model
-    model = VehicleViT(**config["model"])
+    # 1. instantiate model from config dict
+    model = VehicleViT(**model_cfg)
 
-    # 3. load weights if checkpoint is provided
+    # 2. load checkpoint if provided
     if checkpoint_path is not None:
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        # support both raw state_dict and {"model": state_dict} checkpoints
         state_dict = checkpoint["model"] if "model" in checkpoint else checkpoint
         model.load_state_dict(state_dict)
 
-    # 4. move model to device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 3. move to device
     model = model.to(device)
 
     return model
