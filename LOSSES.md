@@ -1,4 +1,4 @@
-# Triplet Loss — `losses/triplet.py`
+# Triplet Loss — `losses/tripletloss.py`
 
 ## Why not cross-entropy
  
@@ -46,11 +46,11 @@ The objective: push $d(a,p)$ down and $d(a,n)$ up simultaneously.
 
 ## The triplet loss
 
-$$\mathcal{L} = \max\left(0,\ d(a,p) - d(a,n) + \alpha\right)$$
+$$\mathcal{L}_{\text{triplet}} = \max\left(0,\ d(a,p) - d(a,n) + \alpha\right)$$
 
 - $d(a,p)$ — distance between anchor and positive
 - $d(a,n)$ — distance between anchor and negative
-- $\alpha = 0.3$ — margin: a safety buffer between the two distances
+- $\alpha = 0.15$ — margin: a safety buffer between the two distances
 
 ```mermaid
 flowchart LR
@@ -66,9 +66,73 @@ flowchart LR
 
 **When loss > 0 :** $d(a,n) - d(a,p) < \alpha$ — the negative is too close, the model learns.
 
-The margin $\alpha = 0.3$ forces a minimum separation gap. Without it the model could
-satisfy $d(a,p) < d(a,n)$ by just a tiny epsilon and stop learning. 0.3 corresponds
-to a separation of approximately 17° on the unit hypersphere for L2-normalized embeddings.
+The margin $\alpha = 0.15$ forces a minimum separation gap. Without it the model could
+satisfy $d(a,p) < d(a,n)$ by just a tiny epsilon and stop learning. On L2-normalized
+embeddings, 0.15 corresponds to a moderate angular separation on the unit hypersphere —
+tight enough to be achievable from scratch, large enough to enforce meaningful separation.
+
+---
+
+## Representation Collapse — the critical failure mode
+
+Training a ViT from scratch with triplet loss alone leads to **representation collapse**:
+all embeddings converge to the same point on the hypersphere.
+
+When all vectors point in the same direction, every pairwise distance approaches zero:
+$d(a,p) \approx 0$ and $d(a,n) \approx 0$. The triplet loss becomes
+$\max(0, 0 - 0 + 0.15) = 0.15$ — nearly satisfied, with small gradients that
+reinforce the collapse rather than fighting it.
+
+The model has found a degenerate solution: it maps every vehicle to the same
+embedding, which trivially satisfies the loss without learning anything discriminative.
+
+This is exactly what happened in our first training runs (run_001 to run_003),
+where the Triplet Health monitor reported `⚠ COLLAPSE` with `d(a,p) ≈ d(a,n) ≈ 0`
+from epoch 9 onward, and the mAP of 87% was revealed to be an evaluation artefact.
+
+---
+
+## Uniformity Loss — collapse prevention
+
+To prevent collapse, we add a **uniformity regularization term** from
+Wang et al. (2020) that penalizes embeddings clustering together on the hypersphere:
+
+$$\mathcal{L}_{\text{unif}} = \log \frac{1}{\binom{B}{2}} \sum_{i < j} e^{-2\|z_i - z_j\|^2}$$
+
+**Intuition:** the Gaussian kernel $e^{-2\|z_i - z_j\|^2}$ is close to 1 when two
+embeddings are nearby and close to 0 when they are far apart. The log-mean of all
+pairwise kernels measures how clustered the embeddings are:
+
+- If all embeddings collapse to one point → all distances → 0 → all kernels → 1 → log(1) = 0 ← **high penalty**
+- If embeddings are spread uniformly → distances large → kernels → 0 → log(~0) → -∞ ← **low penalty (good)**
+
+The uniformity loss is always negative by construction — it decreases as the
+hypersphere is used more uniformly. This is not a bug: it acts as a **repulsive force**
+pushing all embeddings apart regardless of identity, making the degenerate
+all-same-point solution impossible.
+
+**Numerical stability:** the naive implementation `log(mean(exp(...)))` is numerically
+unstable. We use `logsumexp` which applies the log-sum-exp trick internally:
+
+$$\mathcal{L}_{\text{unif}} = \text{logsumexp}(-2\|z_i - z_j\|^2) - \log\binom{B}{2}$$
+
+---
+
+## Combined objective
+
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{triplet}} + \lambda_{\text{unif}} \cdot \mathcal{L}_{\text{unif}}$$
+
+with $\lambda_{\text{unif}} = 0.05$ — small enough to let the triplet loss dominate
+and drive identity separation, large enough to prevent collapse.
+
+| Loss component | Sign | Role |
+|---|---|---|
+| $\mathcal{L}_{\text{triplet}}$ | ≥ 0 | pulls same-identity embeddings together, pushes different ones apart |
+| $\mathcal{L}_{\text{unif}}$ | ≤ 0 | pushes ALL embeddings apart uniformly — prevents collapse |
+| $\mathcal{L}_{\text{total}}$ | can be negative | sum dominated by uniformity when embeddings are well-spread |
+
+The total loss becomes negative when the model has learned to spread embeddings
+well on the hypersphere — this is a healthy sign, not a bug.
 
 ---
 
@@ -108,10 +172,10 @@ With random shuffle, a batch might contain only one image per identity — no po
 to mine. The entire data pipeline was designed around this constraint:
 
 ```
-PKSampler  →  P=16 identities × K=4 images  →  batch of 64
+PKSampler  →  P=20 identities × K=8 images  →  batch of 160
                                                   ↓
-                              each anchor has K-1 = 3 positives
-                              each anchor has (P-1)×K = 60 negatives
+                              each anchor has K-1 = 7 positives
+                              each anchor has (P-1)×K = 152 negatives
 ```
 
 ---
@@ -169,12 +233,12 @@ The fraction of active triplets is the key health signal monitored in
 
 ```
 start of training  :  ~100% active  →  everything is hard, fast learning
-mid training       :  ~40-60% active →  model is making progress
-end of training    :  ~10-20% active →  most triplets are solved
+mid training       :  ~90-95% active →  model is making progress
+end of training    :  ~85-90% active →  hard cases remain, model still learning
 ```
 
-If the active fraction drops to 0% early — either the margin is too small or
-the PKSampler is not providing enough hard cases.
+If the active fraction drops to 0% early — the margin is too small.
+If it stays at 100% indefinitely — representation collapse is occurring.
 
 ---
 
@@ -182,11 +246,12 @@ the PKSampler is not providing enough hard cases.
 
 | Concept | Value | Why |
 |---|---|---|
-| Loss type | Batch-hard triplet | mines hardest cases per batch |
-| Margin $\alpha$ | 0.3 | ~17° separation on unit hypersphere |
+| Loss type | Batch-hard triplet + uniformity | mines hardest cases, prevents collapse |
+| Margin $\alpha$ | 0.15 | achievable from scratch, enforces meaningful separation |
+| Uniformity weight $\lambda$ | 0.05 | collapse prevention without dominating triplet signal |
 | Distance | Euclidean on L2-normalized vectors | equivalent to cosine, fast to compute |
 | Mining scope | within the batch | efficient, no global pass needed |
-| Batch structure | P=16 × K=4 = 64 | guarantees 3 positives + 60 negatives per anchor |
+| Batch structure | P=20 × K=8 = 160 | guarantees 7 positives + 152 negatives per anchor |
 
 ---
 
@@ -195,6 +260,7 @@ the PKSampler is not providing enough hard cases.
 | Source | Link |
 |---|---|
 | Hermans et al., 2017 — Batch-Hard Mining | https://arxiv.org/abs/1703.07737 |
+| Wang et al., 2020 — Uniformity Loss | https://arxiv.org/abs/2005.10242 |
 | AI City Challenge 2021 — baseline 36% mAP | https://www.aicitychallenge.org/2021-evaluation-system/ |
 | lec1 — Empirical risk minimization | lec1.pdf |
 | lec4 — Mini-batching and gradient descent | lec4.pdf page 14 |
