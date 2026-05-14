@@ -45,10 +45,10 @@ class PatchEmbedding(nn.Module):
 
     def __init__(
         self,
-        img_size:    int = 224,  # height and width of the input image
-        patch_size:  int = 16,   # height and width of each patch
-        in_channels: int = 3,    # RGB
-        d_model:     int = 192,  # output dimension per token (ViT-Tiny)
+        img_size: int = 224,  # height and width of the input image
+        patch_size: int = 16, # height and width of each patch
+        in_channels: int = 3, # RGB
+        d_model: int = 192,   # output dimension per token (ViT-Tiny)
     ):
         super().__init__()
 
@@ -107,7 +107,7 @@ class PatchEmbedding(nn.Module):
         The spatial output is a 14×14 grid of 192-d vectors.
         One grid cell = one patch token.
         """
-        x = self.proj(x)      # (B, 3, 224, 224) -> (B, 192, 14, 14)
+        x = self.proj(x) # (B, 3, 224, 224) -> (B, 192, 14, 14)
 
         # =====================================================================
         # 2. Flatten spatial dimensions

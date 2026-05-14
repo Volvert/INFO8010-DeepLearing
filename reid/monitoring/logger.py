@@ -37,6 +37,10 @@ See: engine/evaluate.py — produces eval_metrics
 See: plot.py            — reads metrics.csv and generates local PNG plots
 """
 
+"""
+Monitoring code done with copilote help
+"""
+
 import os
 import csv
 import time

@@ -25,20 +25,18 @@ import argparse
 import yaml
 import torch
 
-from data.dataset          import VehicleReIDDataset, MergedDataset, make_train_eval_split
-from data.dataloader       import (get_train_dataloader,
-                                   get_query_dataloader,
-                                   get_test_dataloader)
-from data.data_transforms  import get_train_transform, get_test_transform
-from model.init_model      import build_model
-from losses.tripletloss    import BatchHardTripletLoss
-from engine.train          import train_one_epoch
-from engine.evaluate       import evaluate
-from utils.schedular       import build_scheduler
-from monitoring.logger          import Logger
+from data.dataset import VehicleReIDDataset, MergedDataset, make_train_eval_split
+from data.dataloader import get_train_dataloader, get_query_dataloader, get_test_dataloader
+from data.data_transforms import get_train_transform, get_test_transform
+from model.init_model import build_model
+from losses.tripletloss import BatchHardTripletLoss
+from engine.train import train_one_epoch
+from engine.evaluate import evaluate
+from utils.schedular import build_scheduler
+from monitoring.logger import Logger
 from monitoring.gradient_health import GradientHealthMonitor
-from monitoring.triplet_health  import TripletHealthMonitor
-from monitoring.plot            import generate_all_plots
+from monitoring.triplet_health import TripletHealthMonitor
+from monitoring.plot import generate_all_plots
 
 
 def main(config_path: str = "config/tiny_vit.yaml") -> None:
@@ -47,9 +45,9 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
-    data  = cfg["data"]
+    data = cfg["data"]
     train = cfg["training"]
-    mon   = cfg["monitoring"]
+    mon = cfg["monitoring"]
 
     # ── device ────────────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,18 +60,18 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
         # ── proper 3-way split — no overlap between train and eval ────────────
         # Load full real train once (no transform — make_train_eval_split applies them)
         full_real = VehicleReIDDataset(
-            root      = os.path.join(data["real_root"], "image_train"),
+            root = os.path.join(data["real_root"], "image_train"),
             label_xml = os.path.join(data["real_root"], "train_label.xml"),
-            transform = None,   # transforms applied inside make_train_eval_split
+            transform = None, # transforms applied inside make_train_eval_split
             id_offset = 0,
         )
 
         real_train_ds, query_dataset, gallery_dataset = make_train_eval_split(
-            dataset         = full_real,
-            n_eval_ids      = data.get("n_eval_ids", 40),
-            seed            = data.get("eval_seed", 42),
+            dataset = full_real,
+            n_eval_ids = data["n_eval_ids"],
+            seed = data["eval_seed"],
             train_transform = get_train_transform(),
-            eval_transform  = get_test_transform(),
+            eval_transform = get_test_transform(),
         )
 
         print(f"Train  : {real_train_ds}")
@@ -85,7 +83,7 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
             # synthetic uses real_train_ds max label as offset to avoid ID collisions
             max_real_id = max(real_train_ds.labels)
             synthetic_train = VehicleReIDDataset(
-                root      = os.path.join(data["synthetic_root"], "sys_image_train"),
+                root = os.path.join(data["synthetic_root"], "sys_image_train"),
                 label_xml = os.path.join(data["synthetic_root"], "train_label.xml"),
                 transform = get_train_transform(),
                 id_offset = max_real_id,
@@ -98,7 +96,7 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
     else:
         # ── official AIC21 splits — vehicleIDs absent → mAP not meaningful ───
         real_train = VehicleReIDDataset(
-            root      = os.path.join(data["real_root"], "image_train"),
+            root = os.path.join(data["real_root"], "image_train"),
             label_xml = os.path.join(data["real_root"], "train_label.xml"),
             transform = get_train_transform(),
             id_offset = 0,
@@ -106,7 +104,7 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
 
         if data["synthetic_root"]:
             synthetic_train = VehicleReIDDataset(
-                root      = os.path.join(data["synthetic_root"], "sys_image_train"),
+                root = os.path.join(data["synthetic_root"], "sys_image_train"),
                 label_xml = os.path.join(data["synthetic_root"], "train_label.xml"),
                 transform = get_train_transform(),
                 id_offset = max(real_train.labels),
@@ -118,44 +116,40 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
             print(f"{real_train}")
 
         query_dataset = VehicleReIDDataset(
-            root      = os.path.join(data["real_root"], "image_query"),
+            root = os.path.join(data["real_root"], "image_query"),
             label_xml = os.path.join(data["real_root"], "query_label.xml"),
             transform = get_test_transform(),
         )
         gallery_dataset = VehicleReIDDataset(
-            root      = os.path.join(data["real_root"], "image_test"),
+            root = os.path.join(data["real_root"], "image_test"),
             label_xml = os.path.join(data["real_root"], "test_label.xml"),
             transform = get_test_transform(),
         )
 
     # ── dataloaders ───────────────────────────────────────────────────────────
-    train_loader   = get_train_dataloader(
-        train_dataset, data["P"], data["K"], data["num_workers"]
-    )
-    query_loader   = get_query_dataloader(
-        query_dataset,   data["eval_batch_size"], data["num_workers"]
-    )
-    gallery_loader = get_test_dataloader(
-        gallery_dataset, data["eval_batch_size"], data["num_workers"]
-    )
+    train_loader = get_train_dataloader(train_dataset, data["P"], data["K"], data["num_workers"])
+    
+    query_loader = get_query_dataloader(query_dataset,   data["eval_batch_size"], data["num_workers"])
+    
+    gallery_loader = get_test_dataloader(gallery_dataset, data["eval_batch_size"], data["num_workers"])
 
     # ── model / optimizer / scheduler / loss ──────────────────────────────────
-    model     = build_model(cfg["model"], device, checkpoint_path=train["resume"])
+    model = build_model(cfg["model"], device, checkpoint_path=train["resume"])
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr           = train["lr"],
+        lr = train["lr"],
         weight_decay = train["weight_decay"],
-        betas        = (0.9, 0.999),
+        betas = tuple(train["betas"]),
     )
     scheduler = build_scheduler(optimizer, train["warmup_epochs"], train["epochs"])
-    loss_fn   = BatchHardTripletLoss(
-        margin      = train["margin"],
-        lambda_unif = train.get("lambda_unif", 0.1),
+    loss_fn = BatchHardTripletLoss(
+        margin = train["margin"],
+        lambda_unif = train["lambda_unif"],
     )
 
     # ── monitoring ────────────────────────────────────────────────────────────
-    logger          = Logger(mon["run_name"], train["epochs"], mon["runs_dir"], config=cfg)
-    grad_monitor    = GradientHealthMonitor(log_every_n_batches=mon["grad_every"])
+    logger = Logger(mon["run_name"], train["epochs"], mon["runs_dir"], config=cfg)
+    grad_monitor = GradientHealthMonitor(log_every_n_batches=mon["grad_every"])
     triplet_monitor = TripletHealthMonitor(log_every_n_batches=1)
 
     # ── epoch loop ────────────────────────────────────────────────────────────
@@ -164,21 +158,20 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
         logger.epoch_start()
 
         train_metrics = train_one_epoch(
-            model           = model,
-            dataloader      = train_loader,
-            loss_fn         = loss_fn,
-            optimizer       = optimizer,
-            device          = device,
-            margin          = train["margin"],
-            grad_monitor    = grad_monitor,
+            model = model,
+            dataloader = train_loader,
+            loss_fn = loss_fn,
+            optimizer = optimizer,
+            device = device,
+            margin = train["margin"],
+            grad_monitor = grad_monitor,
             triplet_monitor = triplet_monitor,
         )
 
         scheduler.step()
 
-        run_eval     = (epoch % mon["eval_every"] == 0) or (epoch == train["epochs"] - 1)
-        eval_metrics = evaluate(model, query_loader, gallery_loader, device) \
-                       if run_eval else {}
+        run_eval = (epoch % mon["eval_every"] == 0) or (epoch == train["epochs"] - 1)
+        eval_metrics = evaluate(model, query_loader, gallery_loader, device) if run_eval else {}
 
         logger.log_epoch(epoch, train_metrics, eval_metrics)
 

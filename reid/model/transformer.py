@@ -37,11 +37,11 @@ class Transformer(nn.Module):
 
     def __init__(
         self,
-        depth:     int   = 6,
-        d_model:   int   = 192,
-        num_heads: int   = 8,
+        depth: int = 6,
+        d_model: int = 192,
+        num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        dropout:   float = 0.1,
+        dropout: float = 0.1,
     ):
         """
         Args:
@@ -55,10 +55,10 @@ class Transformer(nn.Module):
 
         self.blocks = nn.ModuleList([
             EncoderBlock(
-                d_model   = d_model,
+                d_model = d_model,
                 num_heads = num_heads,
                 mlp_ratio = mlp_ratio,
-                dropout   = dropout,
+                dropout = dropout,
             )
             for _ in range(depth)
         ])

@@ -26,6 +26,10 @@ See: engine/train.py — calls compute() after backward(), uses grad_exploding f
 See: monitoring/logger.py — receives the returned dict via train_metrics
 """
 
+"""
+Monitoring code done with copilote help
+"""
+
 import re
 import torch.nn as nn
 

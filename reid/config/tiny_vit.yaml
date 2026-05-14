@@ -17,15 +17,15 @@
 # Passed directly to VehicleViT(**cfg["model"])
 # -----------------------------------------------------------------------------
 model:
-  img_size:    224
-  patch_size:  16
+  img_size: 224
+  patch_size: 16
   in_channels: 3
-  d_model:     192
-  depth:       6
-  num_heads:   8
-  mlp_ratio:   4.0
-  dropout:     0.1
-  embed_dim:   128
+  d_model: 192
+  depth: 6
+  num_heads: 8
+  mlp_ratio: 4.0
+  dropout: 0.1
+  embed_dim: 128
 
 
 # -----------------------------------------------------------------------------
@@ -34,32 +34,35 @@ model:
 data:
   real_root:       /home/fvolvert/datasets/AICity21_Track2_ReID
   synthetic_root:  null #/home/fvolvert/datasets/AICity21_Track2_ReID_Simulation
-  P:               16
-  K:               8
-  num_workers:     4
+  P: 20
+  K: 8
+  num_workers: 4
   eval_batch_size: 128
-  eval_mode:       local   # local = split train | official = query/test sans labels
+  eval_mode: local   # local = split train | official = query/test sans labels
+  n_eval_ids: 40
+  eval_seed: 42
 
 
 # -----------------------------------------------------------------------------
 # Training hyperparameters
 # -----------------------------------------------------------------------------
 training:
-  epochs:        200
-  lr:            3.0e-4
-  weight_decay:  0.01
-  warmup_epochs: 10
-  margin:        0.1
-  resume:        null
-  lambda_unif: 0.3
+  epochs: 2000
+  lr: 5.0e-4
+  weight_decay: 0.01
+  warmup_epochs: 100
+  margin: 0.15
+  resume: null
+  lambda_unif: 0.05
+  betas: [0.9, 0.999]
 
 
 # -----------------------------------------------------------------------------
 # Monitoring
 # -----------------------------------------------------------------------------
 monitoring:
-  run_name:   run_005
-  runs_dir:   runs
-  eval_every: 5
+  run_name: run_007
+  runs_dir: runs
+  eval_every: 10
   grad_every: 1
-  wandb_dir:  wandb_runs
+  wandb_dir: wandb_runs

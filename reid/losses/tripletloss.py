@@ -80,13 +80,13 @@ class BatchHardTripletLoss(nn.Module):
                           default 0.1 — small enough to not override triplet signal
         """
         super().__init__()
-        self.margin      = margin
+        self.margin = margin
         self.lambda_unif = lambda_unif
 
     def forward(
         self,
-        embeddings: torch.Tensor,   # (B, embed_dim) L2-normalized
-        labels:     torch.Tensor,   # (B,)           vehicle_ids
+        embeddings: torch.Tensor, # (B, embed_dim) L2-normalized
+        labels: torch.Tensor,   # (B,) vehicle_ids
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Computes batch-hard triplet loss + uniformity loss and active fraction.
@@ -121,52 +121,37 @@ class BatchHardTripletLoss(nn.Module):
         # Step 4 — hardest positive (B,)
         # For each anchor, find the positive with the LARGEST distance
         # torch.full_like sets non-positive cells to -inf so .max() ignores them
-        hardest_pos_dists = torch.where(
-            pos_mask,
-            dists,
-            torch.full_like(dists, float("-inf")),
-        ).max(dim=1).values   # (B,)
+        hardest_pos_dists = torch.where(pos_mask, dists, torch.full_like(dists, float("-inf")),).max(dim=1).values # (B,)
 
         # Step 5 — hardest negative (B,)
         # For each anchor, find the negative with the SMALLEST distance
         # torch.full_like sets non-negative cells to +inf so .min() ignores them
-        hardest_neg_dists = torch.where(
-            neg_mask,
-            dists,
-            torch.full_like(dists, float("inf")),
-        ).min(dim=1).values   # (B,)
+        hardest_neg_dists = torch.where( neg_mask, dists, torch.full_like(dists, float("inf")),).min(dim=1).values # (B,)
 
         # Step 6 — per-anchor triplet loss (B,)
         # clamp(d_pos - d_neg + margin, min=0)
         # = 0 when d_neg - d_pos > margin (satisfied, no gradient)
         # > 0 when d_neg - d_pos < margin (violated, model learns)
-        triplet_loss = torch.clamp(
-            hardest_pos_dists - hardest_neg_dists + self.margin,
-            min=0.0,
-        )   # (B,)
+        triplet_loss = torch.clamp( hardest_pos_dists - hardest_neg_dists + self.margin, min=0.0,)   # (B,)
 
         # Step 7 — uniformity loss (scalar)
         # Measures how uniformly embeddings are spread on the hypersphere.
         # sq_dists[i,j] = ||z_i - z_j||^2 — squared euclidean distances
         # exp(-2 * sq_dists) — Gaussian kernel: close pairs → high value
-        # log(mean(kernel)) — negative when pairs are spread out (good)
-        #                    — near 0 when pairs cluster together (collapse)
+        # log(mean(kernel)) — negative when pairs are spread out (good) — near 0 when pairs cluster together (collapse)
         # Upper triangle only — avoids counting each pair twice
-        sq_dists  = dists.pow(2)                           # (B, B)
-        triu_mask = torch.triu(
-            torch.ones(sq_dists.shape, dtype=torch.bool, device=sq_dists.device),
-            diagonal=1,
-        )                                                  # upper triangle, no diagonal
-        sq_upper  = sq_dists[triu_mask]                    # (B*(B-1)/2,)
-        unif_loss = torch.log(
-            torch.exp(-2.0 * sq_upper).mean()
-        )                                                  # scalar, ≤ 0
+        sq_dists = dists.pow(2) # (B, B)
+        B = embeddings.shape[0]
+        rows, cols = torch.triu_indices(B, B, offset=1, device=embeddings.device)
+        
+        sq_upper = sq_dists[rows, cols]# (B*(B-1)/2,)
+        unif_loss = torch.logsumexp(-2.0 * sq_upper, dim=0) - torch.log(torch.tensor(sq_upper.shape[0], dtype=torch.float32, device=sq_upper.device)) # scalar, ≤ 0
 
         # Step 8 — total loss
         # triplet pulls same-identity embeddings together and pushes different ones apart
         # uniformity pushes ALL embeddings apart — prevents collapse to a single point
         loss_triplet = triplet_loss.mean()
-        loss_total   = loss_triplet + self.lambda_unif * unif_loss
+        loss_total = loss_triplet + self.lambda_unif * unif_loss
 
         # Step 9 — active fraction
         active_fraction = (triplet_loss > 0).float().mean()

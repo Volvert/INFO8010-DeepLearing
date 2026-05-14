@@ -9,16 +9,16 @@ Its job is to:
   - batch samples together
   - shuffle or sample in a controlled order (PKSampler for train)
   - parallelize image loading across multiple CPU workers
-  - accelerate CPU → GPU transfer with pin_memory
+  - accelerate CPU -> GPU transfer with pin_memory
 
 Three functions, one per split:
-  get_train_dataloader  → PKSampler, batches by identity
-  get_query_dataloader  → sequential, no shuffle, for retrieval evaluation
-  get_test_dataloader   → sequential, no shuffle, for retrieval evaluation
+  get_train_dataloader  -> PKSampler, batches by identity
+  get_query_dataloader  -> sequential, no shuffle, for retrieval evaluation
+  get_test_dataloader   -> sequential, no shuffle, for retrieval evaluation
 
 pin_memory is derived from device availability — not hardcoded:
-  GPU available → pin_memory=True  (page-locked memory speeds up CPU→GPU transfer)
-  CPU only      → pin_memory=False (pinning has no effect and wastes memory)
+  GPU available -> pin_memory=True  (page-locked memory speeds up CPU→GPU transfer)
+  CPU only      -> pin_memory=False (pinning has no effect and wastes memory)
 
 See: data/batch.py   — PKSampler
 See: data/dataset.py — VehicleReIDDataset, MergedDataset
@@ -34,9 +34,9 @@ from data.batch import PKSampler
 # =============================================================================
 
 def get_train_dataloader(
-    dataset:     Dataset,   # VehicleReIDDataset or MergedDataset
-    P:           int,
-    K:           int,
+    dataset: Dataset,   # VehicleReIDDataset or MergedDataset
+    P: int,
+    K: int,
     num_workers: int = 4,
 ) -> DataLoader:
     """
@@ -49,7 +49,7 @@ def get_train_dataloader(
     Args:
         dataset     : VehicleReIDDataset or MergedDataset — must expose .labels
         P           : identities per batch  (e.g. 16)
-        K           : images per identity   (e.g. 4)  →  batch_size = P × K = 64
+        K           : images per identity   (e.g. 4)  ->  batch_size = P × K = 64
         num_workers : parallel CPU workers for image loading
 
     Returns:
@@ -60,11 +60,11 @@ def get_train_dataloader(
 
     return DataLoader(
         dataset,
-        batch_size  = P * K,
-        sampler     = sampler,      # controls order — replaces shuffle
+        batch_size = P * K,
+        sampler = sampler,
         num_workers = num_workers,
-        pin_memory  = pin_memory,
-        drop_last   = True,         # ensures every batch has exactly P×K images
+        pin_memory = pin_memory,
+        drop_last = True,
     )
 
 
@@ -73,7 +73,7 @@ def get_train_dataloader(
 # =============================================================================
 
 def get_query_dataloader(
-    dataset:    Dataset,
+    dataset: Dataset,
     batch_size: int = 128,
     num_workers: int = 4,
 ) -> DataLoader:
@@ -95,11 +95,11 @@ def get_query_dataloader(
 
     return DataLoader(
         dataset,
-        batch_size  = batch_size,
-        shuffle     = False,        # fixed order — required for kNN matching
+        batch_size = batch_size,
+        shuffle = False,
         num_workers = num_workers,
-        pin_memory  = pin_memory,
-        drop_last   = False,        # keep all query images — none can be dropped
+        pin_memory = pin_memory,
+        drop_last = False,
     )
 
 
@@ -108,8 +108,8 @@ def get_query_dataloader(
 # =============================================================================
 
 def get_test_dataloader(
-    dataset:     Dataset,
-    batch_size:  int = 128,
+    dataset: Dataset,
+    batch_size: int = 128,
     num_workers: int = 4,
 ) -> DataLoader:
     """
@@ -130,9 +130,9 @@ def get_test_dataloader(
 
     return DataLoader(
         dataset,
-        batch_size  = batch_size,
-        shuffle     = False,        # fixed order — required for kNN matching
+        batch_size = batch_size,
+        shuffle = False,
         num_workers = num_workers,
-        pin_memory  = pin_memory,
-        drop_last   = False,        # keep all gallery images — none can be dropped
+        pin_memory = pin_memory,
+        drop_last = False,
     )

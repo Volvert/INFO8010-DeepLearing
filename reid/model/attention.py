@@ -61,13 +61,13 @@ class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int = 192, num_heads: int = 8, dropout: float = 0.1):
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-        self.d_model   = d_model
+        self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k       = d_model // num_heads  # 192 // 8 = 24
-        self.scale     = self.d_k ** -0.5      # 1 / sqrt(24) — stored, not recomputed
+        self.d_k = d_model // num_heads  # 192 // 8 = 24
+        self.scale = self.d_k ** -0.5      # 1 / sqrt(24) — stored, not recomputed
 
-        self.qkv_proj  = nn.Linear(d_model, 3 * d_model)  # fused W_Q, W_K, W_V
-        self.out_proj  = nn.Linear(d_model, d_model)       # W_O
+        self.qkv_proj = nn.Linear(d_model, 3 * d_model)  # fused W_Q, W_K, W_V
+        self.out_proj = nn.Linear(d_model, d_model)       # W_O
         self.attn_drop = nn.Dropout(dropout)
 
     # =========================================================================
@@ -104,18 +104,18 @@ class MultiHeadSelfAttention(nn.Module):
         """
         batch_size, seq_len, _ = x.shape
 
-        qkv = self.qkv_proj(x)                                       # (batch_size, seq_len, 3*d_model)
+        qkv = self.qkv_proj(x) # (batch_size, seq_len, 3*d_model)
         qkv = qkv.reshape(batch_size, seq_len, self.num_heads, 3 * self.d_k)  # (batch_size, seq_len, h, 3*d_k)
-        qkv = qkv.permute(0, 2, 1, 3)                                # (batch_size, h, seq_len, 3*d_k)
+        qkv = qkv.permute(0, 2, 1, 3) # (batch_size, h, seq_len, 3*d_k)
 
-        q, k, v = qkv.chunk(3, dim=-1)                               # 3 x (batch_size, h, seq_len, d_k)
+        q, k, v = qkv.chunk(3, dim=-1) # 3 x (batch_size, h, seq_len, d_k)
 
-        attn_scores  = torch.matmul(q, k.transpose(-2, -1)) * self.scale  # (batch_size, h, seq_len, seq_len)
-        attn_weights = F.softmax(attn_scores, dim=-1)                      # (batch_size, h, seq_len, seq_len)
+        attn_scores  = torch.matmul(q, k.transpose(-2, -1)) * self.scale # (batch_size, h, seq_len, seq_len)
+        attn_weights = F.softmax(attn_scores, dim=-1) # (batch_size, h, seq_len, seq_len)
         attn_weights = self.attn_drop(attn_weights)
 
-        attn_output = torch.matmul(attn_weights, v)                        # (batch_size, h, seq_len, d_k)
-        attn_output = attn_output.permute(0, 2, 1, 3).contiguous()        # (batch_size, seq_len, h, d_k)
-        attn_output = attn_output.view(batch_size, seq_len, self.d_model)           # (batch_size, seq_len, d_model)
+        attn_output = torch.matmul(attn_weights, v) # (batch_size, h, seq_len, d_k)
+        attn_output = attn_output.permute(0, 2, 1, 3).contiguous() # (batch_size, seq_len, h, d_k)
+        attn_output = attn_output.view(batch_size, seq_len, self.d_model) # (batch_size, seq_len, d_model)
 
-        return self.out_proj(attn_output)                                  # (batch_size, seq_len, d_model)
+        return self.out_proj(attn_output) # (batch_size, seq_len, d_model)

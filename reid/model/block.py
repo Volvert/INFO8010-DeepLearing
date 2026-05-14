@@ -57,10 +57,10 @@ class EncoderBlock(nn.Module):
 
     def __init__(
         self,
-        d_model:   int   = 192,
-        num_heads: int   = 8,
+        d_model: int = 192,
+        num_heads: int= 8,
         mlp_ratio: float = 4.0,
-        dropout:   float = 0.1,
+        dropout: float = 0.1,
     ):
         """
         Args:
@@ -73,9 +73,9 @@ class EncoderBlock(nn.Module):
         super().__init__()
 
         self.norm1 = nn.LayerNorm(d_model)
-        self.attn  = MultiHeadSelfAttention(d_model, num_heads, dropout)
+        self.attn = MultiHeadSelfAttention(d_model, num_heads, dropout)
         self.norm2 = nn.LayerNorm(d_model)
-        self.mlp   = nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(d_model, int(d_model * mlp_ratio)),
             nn.GELU(),
             nn.Dropout(dropout),

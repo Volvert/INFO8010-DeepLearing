@@ -21,7 +21,7 @@ Extra attributes in the synthetic XML (colorID, typeID, orientation, etc.)
 are silently ignored — xml.etree only reads what you ask for.
 
 The id_offset parameter shifts all vehicle IDs at parse time:
-  real      = VehicleReIDDataset(..., id_offset=0)            IDs : 1 – 440
+  real = VehicleReIDDataset(..., id_offset=0)                      IDs : 1 – 440
   synthetic = VehicleReIDDataset(..., id_offset=max(real.labels))  IDs : 441 – 1802
 
 This eliminates ID collisions before the datasets are combined.
@@ -34,7 +34,7 @@ Dataset that exposes a flat .labels list — required by PKSampler.
 --- make_train_eval_split ---
 
 Proper 3-way split with NO overlap between train and eval:
-  - 40 held-out identities → never seen during training
+  - 40 held-out identities -> never seen during training
   - train_ds  : all images of the 400 remaining identities
   - query_ds  : 1 image per held-out identity
   - gallery_ds: all remaining images of held-out identities
@@ -42,7 +42,7 @@ Proper 3-way split with NO overlap between train and eval:
 This is the standard academic Re-ID evaluation protocol when
 the official test ground truth is unavailable (AIC21 keeps it secret).
 
-See: data/batch.py      — PKSampler reads dataset.labels
+See: data/batch.py — PKSampler reads dataset.labels
 See: data/dataloader.py — get_train_dataloader passes dataset to PKSampler
 """
 
@@ -73,26 +73,26 @@ class VehicleReIDDataset(Dataset):
 
     def __init__(
         self,
-        root:      str,
+        root: str,
         label_xml: str,
         transform = None,
         id_offset: int = 0,
     ):
-        self.root      = root
+        self.root = root
         self.transform = transform
         self.id_offset = id_offset
         self.samples: list[tuple[str, int, int]] = []
-        self.labels:  list[int]                  = []
+        self.labels: list[int] = []
         self._parse_xml(label_xml)
 
     def _parse_xml(self, label_xml: str) -> None:
         tree = ET.parse(label_xml)
         root = tree.getroot()
         for item in root.iter("Item"):
-            name       = item.get("imageName")
+            name = item.get("imageName")
             vehicle_id = int(item.get("vehicleID", -1)) + self.id_offset
-            camera_id  = int(item.get("cameraID")[1:])
-            img_path   = os.path.join(self.root, name)
+            camera_id = int(item.get("cameraID")[1:])
+            img_path = os.path.join(self.root, name)
             self.samples.append((img_path, vehicle_id, camera_id))
             self.labels.append(vehicle_id)
 
@@ -132,10 +132,10 @@ class MergedDataset(Dataset):
     """
 
     def __init__(self, real: VehicleReIDDataset, synthetic: VehicleReIDDataset):
-        self.real      = real
+        self.real = real
         self.synthetic = synthetic
-        self._n_real   = len(real)
-        self.labels    = real.labels + synthetic.labels
+        self._n_real = len(real)
+        self.labels = real.labels + synthetic.labels
 
     def __len__(self) -> int:
         return len(self.real) + len(self.synthetic)
@@ -166,8 +166,8 @@ class _SubDataset(Dataset):
     """
 
     def __init__(self, samples: list, transform=None):
-        self.samples   = samples
-        self.labels    = [s[1] for s in samples]
+        self.samples = samples
+        self.labels = [s[1] for s in samples]
         self.transform = transform
 
     def __len__(self) -> int:
@@ -199,11 +199,11 @@ class _SubDataset(Dataset):
 # =============================================================================
 
 def make_train_eval_split(
-    dataset:         "VehicleReIDDataset",
-    n_eval_ids:      int = 40,
-    seed:            int = 42,
-    train_transform       = None,
-    eval_transform        = None,
+    dataset: "VehicleReIDDataset",
+    n_eval_ids: int = 40,
+    seed: int = 42,
+    train_transform = None,
+    eval_transform = None,
 ) -> tuple["_SubDataset", "_SubDataset", "_SubDataset"]:
     """
     Splits a VehicleReIDDataset into 3 non-overlapping splits.
@@ -241,8 +241,8 @@ def make_train_eval_split(
     rng.shuffle(all_ids)
     eval_ids = set(all_ids[:n_eval_ids])
 
-    train_samples:   list = []
-    query_samples:   list = []
+    train_samples: list = []
+    query_samples: list = []
     gallery_samples: list = []
 
     for vid, indices in id_to_indices.items():
@@ -250,15 +250,15 @@ def make_train_eval_split(
         local_rng.shuffle(indices)
 
         if vid in eval_ids:
-            # held-out: 1 image → query, rest → gallery
+            # held-out: 1 image -> query, rest -> gallery
             query_samples.append(dataset.samples[indices[0]])
             gallery_samples.extend(dataset.samples[i] for i in indices[1:])
         else:
-            # training identity: all images → train
+            # training identity: all images -> train
             train_samples.extend(dataset.samples[i] for i in indices)
 
-    train_ds   = _SubDataset(train_samples,   train_transform)
-    query_ds   = _SubDataset(query_samples,   eval_transform)
+    train_ds = _SubDataset(train_samples,   train_transform)
+    query_ds = _SubDataset(query_samples,   eval_transform)
     gallery_ds = _SubDataset(gallery_samples, eval_transform)
 
     return train_ds, query_ds, gallery_ds

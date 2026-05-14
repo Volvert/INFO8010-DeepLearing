@@ -27,8 +27,8 @@ Training transform order enforced by Compose:
   7. RandomErasing        -> occlusion simulation, must come after ToTensor
 
 Test transform order:
-  1. Resize    -> fixed 224x224, no randomness
-  2. ToTensor  -> PIL to float32 tensor [0, 1]
+  1. Resize -> fixed 224x224, no randomness
+  2. ToTensor -> PIL to float32 tensor [0, 1]
   3. Normalize -> same ImageNet stats as training, must be identical
 
 get_test_transform() is applied to image_query/ and image_test/ splits.

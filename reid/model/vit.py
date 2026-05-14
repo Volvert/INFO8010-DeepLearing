@@ -55,15 +55,15 @@ class VehicleViT(nn.Module):
 
     def __init__(
         self,
-        img_size:    int = 224,   # input image size (height == width)
-        patch_size:  int = 16,    # patch size — controls number of tokens
+        img_size: int = 224,   # input image size (height == width)
+        patch_size: int = 16,    # patch size — controls number of tokens
         in_channels: int = 3,     # RGB
-        d_model:     int = 192,   # transformer hidden dimension (ViT-Tiny)
-        depth:       int = 6,     # number of transformer encoder blocks
-        num_heads:   int = 8,     # number of attention heads per block
-        mlp_ratio:   float = 4.0, # FFN hidden dim = d_model * mlp_ratio = 768
-        dropout:     float = 0.1, # dropout rate in FFN and attention weights
-        embed_dim:   int = 128,   # final embedding dimension for kNN retrieval
+        d_model: int = 192,   # transformer hidden dimension (ViT-Tiny)
+        depth: int = 6,     # number of transformer encoder blocks
+        num_heads: int = 8,     # number of attention heads per block
+        mlp_ratio: float = 4.0, # FFN hidden dim = d_model * mlp_ratio = 768
+        dropout: float = 0.1, # dropout rate in FFN and attention weights
+        embed_dim: int = 128,   # final embedding dimension for kNN retrieval
     ):
         super().__init__()
 
@@ -225,43 +225,43 @@ class VehicleViT(nn.Module):
         Returns:
             embeddings : (batch_size, 128) — L2-normalized embedding vectors
         """
-        batch_size = x.shape[0]   # batch size — needed to expand cls_token
+        batch_size = x.shape[0] # batch size — needed to expand cls_token
 
         # step 1 — patch embedding
-        x = self.patch_embed(x)                          # (batch_size, 196, 192)
+        x = self.patch_embed(x)  # (batch_size, 196, 192)
 
         # step 2 — expand cls_token to batch size
-        cls = self.cls_token.expand(batch_size, -1, -1)           # (batch_size, 1, 192)
+        cls = self.cls_token.expand(batch_size, -1, -1) # (batch_size, 1, 192)
         # -1 means "keep this dimension unchanged"
         # expand does not copy memory — it creates a view
 
         # step 3 — prepend CLS token to patch sequence
-        x = torch.cat([cls, x], dim=1)                   # (batch_size, 197, 192)
+        x = torch.cat([cls, x], dim=1) # (batch_size, 197, 192)
         # dim=1 is the sequence dimension
         # CLS occupies position 0, patches occupy positions 1-196
 
         # step 4 — add positional embedding
-        x = x + self.pos_embed                           # (batch_size, 197, 192)
+        x = x + self.pos_embed # (batch_size, 197, 192)
         # pos_embed is (1, 197, 192) — broadcast over batch dimension
 
         # step 5 — dropout on token sequence
-        x = self.pos_drop(x)                             # (batch_size, 197, 192)
+        x = self.pos_drop(x) # (batch_size, 197, 192)
 
         # step 6 — transformer encoder
-        x = self.transformer(x)                          # (batch_size, 197, 192)
+        x = self.transformer(x)  # (batch_size, 197, 192)
 
         # step 7 — extract CLS token (position 0)
-        x = x[:, 0, :]                                   # (batch_size, 192)
+        x = x[:, 0, :] # (batch_size, 192)
         # x[:, 0, :] means: all batches, position 0, all features
 
         # step 8 — layer norm
-        x = self.norm(x)                                 # (batch_size, 192)
+        x = self.norm(x) # (batch_size, 192)
 
         # step 9 — projection head
-        x = self.proj_head(x)                            # (batch_size, 128)
+        x = self.proj_head(x) # (batch_size, 128)
 
         # step 10 — L2 normalize onto unit hypersphere
-        x = F.normalize(x, dim=-1)                       # (batch_size, 128)
+        x = F.normalize(x, dim=-1) # (batch_size, 128)
         # F.normalize divides each vector by its L2 norm
         # after this step: ||x[i]|| = 1 for all i
         # cosine distance = euclidean distance on the unit hypersphere

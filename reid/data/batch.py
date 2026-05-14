@@ -48,8 +48,7 @@ class PKSampler(Sampler):
     P identities with K images each.
 
     Attributes:
-        labels     : list of vehicle_id parallel to dataset.samples
-                     used to group indices by identity
+        labels     : list of vehicle_id parallel to dataset.sample used to group indices by identity
         P          : number of identities per batch
         K          : number of images per identity per batch
         num_batches: number of batches per epoch
@@ -58,8 +57,7 @@ class PKSampler(Sampler):
     def __init__(self, labels: list, P: int, K: int):
         """
         Args:
-            labels : list of vehicle_id for each image in the dataset
-                     comes from dataset.labels (built by _parse_xml)
+            labels : list of vehicle_id for each image in the dataset comes from dataset.labels (built by _parse_xml)
             P      : number of identities per batch (e.g. 16)
             K      : number of images per identity  (e.g. 4)
         """
@@ -90,8 +88,8 @@ class PKSampler(Sampler):
 
     After this method:
       self.index_per_identity[vid] = [idx, idx, ...]  for each identity vid
-      self.unique_identities       = [vid1, vid2, ...]
-      self.num_batches             = len(unique_identities) // P
+      self.unique_identities = [vid1, vid2, ...]
+      self.num_batches = len(unique_identities) // P
     """
 
     def _build_index(self) -> None:

@@ -23,8 +23,8 @@ from model.vit import VehicleViT
 
 
 def build_model(
-    model_cfg:       dict,
-    device:          torch.device,
+    model_cfg: dict,
+    device: torch.device,
     checkpoint_path: str | None = None,
 ) -> VehicleViT:
     """

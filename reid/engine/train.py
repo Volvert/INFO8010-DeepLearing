@@ -65,13 +65,13 @@ from monitoring.triplet_health  import TripletHealthMonitor
 
 
 def train_one_epoch(
-    model:           nn.Module,
-    dataloader:      DataLoader,
-    loss_fn:         BatchHardTripletLoss,
-    optimizer:       torch.optim.Optimizer,
-    device:          torch.device,
-    margin:          float = 0.3,
-    grad_monitor:    GradientHealthMonitor | None = None,
+    model: nn.Module,
+    dataloader: DataLoader,
+    loss_fn: BatchHardTripletLoss,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    margin: float = 0.3,
+    grad_monitor: GradientHealthMonitor | None = None,
     triplet_monitor: TripletHealthMonitor  | None = None,
 ) -> dict:
     """
@@ -100,7 +100,7 @@ def train_one_epoch(
     n_batches = len(dataloader)
 
     # running accumulators — summed over batches, divided at epoch end
-    total_loss   = 0.0
+    total_loss = 0.0
     total_active = 0.0
 
     # per-batch triplet health dicts — averaged at epoch end
@@ -119,7 +119,7 @@ def train_one_epoch(
         # ------------------------------------------------------------------
         # Move to device (CPU → GPU)
         # ------------------------------------------------------------------
-        images      = images.to(device)
+        images = images.to(device)
         vehicle_ids = vehicle_ids.to(device)
 
         # ------------------------------------------------------------------
@@ -192,7 +192,7 @@ def train_one_epoch(
         # ------------------------------------------------------------------
         # Step 9 — accumulate
         # ------------------------------------------------------------------
-        total_loss   += loss.item()   # .item() converts 0-d GPU tensor → Python float
+        total_loss += loss.item()   # .item() converts 0-d GPU tensor → Python float
         total_active += active.item()
 
     # =========================================================================
@@ -201,9 +201,9 @@ def train_one_epoch(
 
     # core metrics — averaged over all batches
     train_metrics = {
-        "loss":            total_loss   / n_batches,
+        "loss": total_loss / n_batches,
         "active_triplets": total_active / n_batches,
-        "lr":              optimizer.param_groups[0]["lr"],
+        "lr": optimizer.param_groups[0]["lr"],
     }
 
     # triplet health — epoch average across all batches
