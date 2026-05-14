@@ -1,0 +1,119 @@
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torchvision/transforms/v2/_deprecated.py:42: UserWarning: The transform `ToTensor()` is deprecated and will be removed in a future release. Instead, please use `v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])`.Output is equivalent up to float precision.
+  warnings.warn(
+
+device : cuda
+MergedDataset(real=52717, synthetic=192150, total=244867, identities=1802)
+
+[1m┌──────────────────────────────────────────────────────────────┐[0m
+[1m│                    VehicleViT — Training                     │[0m
+[1m├──────────────────────────────────────────────────────────────┤[0m
+[1m│  Run    : run_001                                            │[0m
+[1m│  Epochs : 50                                                 │[0m
+[1m│  CSV    : runs/run_001/metrics.csv                           │[0m
+[1m└──────────────────────────────────────────────────────────────┘[0m
+
+[2m──────────────────────────────────────────────────────────────────────[0m
+[2m   Epoch      Loss   Active%          LR    Rank-1       mAP   Time(s)[0m
+[2m──────────────────────────────────────────────────────────────────────[0m
+  1/50  [91m  0.5814[0m  [93m  100.0%[0m    1.00e-10  [92m  1.0000[0m  [92m  1.0000[0m     135.5  [96m[1m★ best[0m[0m
+[2m19:34:23[0m  [96mℹ[0m  best mAP 1.0000 → runs/run_001/best_model.pth
+
+[1m  Triplet Health  epoch 0[0m  [93m● early phase[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         1.3262  ← should decrease
+  mean d(a,n)         0.8447  ← should increase
+  gap                 -0.4814  ← margin = 0.1
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [93m4.89e+00[0m
+  patch_embed       [93m2.65e+00[0m
+  cls_token         [92m3.29e-01[0m
+  pos_embed         [92m3.34e-01[0m
+  norm              [92m5.93e-02[0m
+  proj_head         [92m1.58e+00[0m
+  blocks.0          [93m2.17e+00[0m
+  blocks.1          [92m1.68e+00[0m
+  blocks.2          [92m1.44e+00[0m
+  blocks.3          [92m1.35e+00[0m
+  blocks.4          [92m1.23e+00[0m
+  blocks.5          [92m1.12e+00[0m
+  [2m──────────────────────────────────────────────[0m
+
+  2/50  [93m  0.3721[0m  [93m  100.0%[0m    2.00e-05  [2m       —[0m  [2m       —[0m      41.1        
+  3/50  [93m  0.3330[0m  [93m  100.0%[0m    4.00e-05  [2m       —[0m  [2m       —[0m      31.8        
+  4/50  [93m  0.3080[0m  [93m  100.0%[0m    6.00e-05  [2m       —[0m  [2m       —[0m      29.8        
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torch/optim/lr_scheduler.py:198: UserWarning: The epoch parameter in `scheduler.step()` was not necessary and is being deprecated where possible. Please use `scheduler.step()` to step the scheduler. During the deprecation, if epoch is different from None, the closed form is used instead of the new chainable form, where available. Please open an issue if you are unable to replicate your use case: https://github.com/pytorch/pytorch/issues/new/choose.
+  warnings.warn(EPOCH_DEPRECATION_WARNING, UserWarning)
+  5/50  [93m  0.2746[0m  [93m  100.0%[0m    8.00e-05  [2m       —[0m  [2m       —[0m      29.4        
+  6/50  [93m  0.2329[0m  [93m  100.0%[0m    1.00e-04  [92m  1.0000[0m  [92m  1.0000[0m      52.9        
+  7/50  [93m  0.1870[0m  [93m  100.0%[0m    9.99e-05  [2m       —[0m  [2m       —[0m      27.8        
+  8/50  [93m  0.1503[0m  [93m  100.0%[0m    9.95e-05  [2m       —[0m  [2m       —[0m      27.4        
+  9/50  [93m  0.1324[0m  [93m  100.0%[0m    9.89e-05  [2m       —[0m  [2m       —[0m      28.0        
+ 10/50  [93m  0.1240[0m  [93m  100.0%[0m    9.81e-05  [2m       —[0m  [2m       —[0m      27.7        
+
+[1m  Triplet Health  epoch 9[0m  [93m● early phase[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         0.0865  ← should decrease
+  mean d(a,n)         0.0625  ← should increase
+  gap                 -0.0240  ← margin = 0.1
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [92m3.31e-01[0m
+  patch_embed       [92m6.97e-02[0m
+  cls_token         [92m1.36e-02[0m
+  pos_embed         [92m1.37e-02[0m
+  norm              [92m7.06e-03[0m
+  proj_head         [92m2.92e-01[0m
+  blocks.0          [92m6.51e-02[0m
+  blocks.1          [92m5.65e-02[0m
+  blocks.2          [92m5.43e-02[0m
+  blocks.3          [92m5.24e-02[0m
+  blocks.4          [92m5.13e-02[0m
+  blocks.5          [92m5.35e-02[0m
+  [2m──────────────────────────────────────────────[0m
+
+ 11/50  [93m  0.1195[0m  [93m  100.0%[0m    9.70e-05  [92m  1.0000[0m  [92m  1.0000[0m      51.6        
+ 12/50  [93m  0.1170[0m  [93m  100.0%[0m    9.57e-05  [2m       —[0m  [2m       —[0m      27.0        
+ 13/50  [93m  0.1147[0m  [93m  100.0%[0m    9.41e-05  [2m       —[0m  [2m       —[0m      26.6        
+ 14/50  [93m  0.1130[0m  [93m  100.0%[0m    9.24e-05  [2m       —[0m  [2m       —[0m      26.2        
+ 15/50  [93m  0.1117[0m  [93m  100.0%[0m    9.05e-05  [2m       —[0m  [2m       —[0m      26.2        
+ 16/50  [93m  0.1103[0m  [93m  100.0%[0m    8.83e-05  [92m  1.0000[0m  [92m  1.0000[0m      50.3        
+ 17/50  [93m  0.1101[0m  [93m  100.0%[0m    8.60e-05  [2m       —[0m  [2m       —[0m      26.0        
+ 18/50  [93m  0.1082[0m  [93m  100.0%[0m    8.35e-05  [2m       —[0m  [2m       —[0m      26.3        
+ 19/50  [93m  0.1075[0m  [93m  100.0%[0m    8.08e-05  [2m       —[0m  [2m       —[0m      25.3        
+ 20/50  [93m  0.1069[0m  [93m  100.0%[0m    7.80e-05  [2m       —[0m  [2m       —[0m      25.0        
+
+[1m  Triplet Health  epoch 19[0m  [91m[1m⚠ COLLAPSE[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         0.0247  ← should decrease
+  mean d(a,n)         0.0178  ← should increase
+  gap                 -0.0069  ← margin = 0.1
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [92m1.76e-01[0m
+  patch_embed       [92m3.36e-02[0m
+  cls_token         [92m4.47e-03[0m
+  pos_embed         [92m4.54e-03[0m
+  norm              [92m2.30e-03[0m
+  proj_head         [92m1.65e-01[0m
+  blocks.0          [92m2.78e-02[0m
+  blocks.1          [92m1.98e-02[0m
+  blocks.2          [92m1.86e-02[0m
+  blocks.3          [92m1.73e-02[0m
+  blocks.4          [92m1.72e-02[0m
+  blocks.5          [92m1.77e-02[0m
+  [2m──────────────────────────────────────────────[0m
+
+slurmstepd: error: *** JOB 3860225 ON compute-15 CANCELLED AT 2026-05-13T19:44:54 ***

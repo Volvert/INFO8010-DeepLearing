@@ -1,0 +1,99 @@
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torchvision/transforms/v2/_deprecated.py:42: UserWarning: The transform `ToTensor()` is deprecated and will be removed in a future release. Instead, please use `v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])`.Output is equivalent up to float precision.
+  warnings.warn(
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/fvolvert/.netrc.
+wandb: Currently logged in as: florent-volvert (florent-volvert-university-of-li-ge) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run ctn83s34
+wandb: Tracking run with wandb version 0.26.1
+wandb: Run data is saved locally in wandb_runs/wandb/run-20260514_103503-ctn83s34
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run run_005
+wandb: ⭐️ View project at https://wandb.ai/florent-volvert-university-of-li-ge/vehicle-reid
+wandb: 🚀 View run at https://wandb.ai/florent-volvert-university-of-li-ge/vehicle-reid/runs/ctn83s34
+
+device : cuda
+Train  : _SubDataset(images=47710, identities=400)
+Query  : _SubDataset(images=40, identities=40)
+Gallery: _SubDataset(images=4967, identities=40)
+  WandB  : [92menabled[0m  →  https://wandb.ai/florent-volvert-university-of-li-ge/vehicle-reid/runs/ctn83s34
+
+[1m┌──────────────────────────────────────────────────────────────┐[0m
+[1m│                    VehicleViT — Training                     │[0m
+[1m├──────────────────────────────────────────────────────────────┤[0m
+[1m│  Run    : run_005                                            │[0m
+[1m│  Epochs : 200                                                │[0m
+[1m│  CSV    : runs/run_005/metrics.csv                           │[0m
+[1m└──────────────────────────────────────────────────────────────┘[0m
+
+[2m──────────────────────────────────────────────────────────────────────[0m
+[2m   Epoch      Loss   Active%          LR    Rank-1       mAP   Time(s)[0m
+[2m──────────────────────────────────────────────────────────────────────[0m
+  1/200  [92m -0.2142[0m  [93m  100.0%[0m    3.00e-10  [93m  0.1000[0m  [93m  0.0405[0m      31.9  [96m[1m★ best[0m[0m
+[2m10:35:37[0m  [96mℹ[0m  best mAP 0.0405 → runs/run_005/best_model.pth
+
+[1m  Triplet Health  epoch 0[0m  [93m● early phase[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         1.3921  ← should decrease
+  mean d(a,n)         0.8563  ← should increase
+  gap                 -0.5358  ← margin = 0.1
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [93m7.81e+00[0m
+  patch_embed       [93m4.80e+00[0m
+  cls_token         [92m6.61e-01[0m
+  pos_embed         [92m6.63e-01[0m
+  norm              [92m8.11e-02[0m
+  proj_head         [93m2.09e+00[0m
+  blocks.0          [93m3.58e+00[0m
+  blocks.1          [93m2.49e+00[0m
+  blocks.2          [93m2.16e+00[0m
+  blocks.3          [92m1.95e+00[0m
+  blocks.4          [92m1.67e+00[0m
+  blocks.5          [92m1.57e+00[0m
+  [2m──────────────────────────────────────────────[0m
+
+  2/200  [92m -0.4058[0m  [93m  100.0%[0m    3.00e-05  [2m       —[0m  [2m       —[0m      13.1        
+  3/200  [92m -0.5796[0m  [93m  100.0%[0m    6.00e-05  [2m       —[0m  [2m       —[0m      12.5        
+  4/200  [92m -0.6657[0m  [93m  100.0%[0m    9.00e-05  [2m       —[0m  [2m       —[0m      12.3        
+  5/200  [92m -0.7103[0m  [93m  100.0%[0m    1.20e-04  [2m       —[0m  [2m       —[0m      11.8        
+  6/200  [92m -0.7276[0m  [93m  100.0%[0m    1.50e-04  [93m  0.1500[0m  [93m  0.0630[0m      16.2  [96m[1m★ best[0m[0m
+[2m10:36:43[0m  [96mℹ[0m  best mAP 0.0630 → runs/run_005/best_model.pth
+  7/200  [92m -0.7379[0m  [93m  100.0%[0m    1.80e-04  [2m       —[0m  [2m       —[0m      11.6        
+  8/200  [92m -0.7493[0m  [93m  100.0%[0m    2.10e-04  [2m       —[0m  [2m       —[0m      11.5        
+  9/200  [92m -0.7553[0m  [93m  100.0%[0m    2.40e-04  [2m       —[0m  [2m       —[0m      11.2        
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torch/optim/lr_scheduler.py:198: UserWarning: The epoch parameter in `scheduler.step()` was not necessary and is being deprecated where possible. Please use `scheduler.step()` to step the scheduler. During the deprecation, if epoch is different from None, the closed form is used instead of the new chainable form, where available. Please open an issue if you are unable to replicate your use case: https://github.com/pytorch/pytorch/issues/new/choose.
+  warnings.warn(EPOCH_DEPRECATION_WARNING, UserWarning)
+ 10/200  [92m -0.7597[0m  [93m  100.0%[0m    2.70e-04  [2m       —[0m  [2m       —[0m      10.9        
+
+[1m  Triplet Health  epoch 9[0m  [93m● early phase[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         1.5073  ← should decrease
+  mean d(a,n)         1.1894  ← should increase
+  gap                 -0.3180  ← margin = 0.1
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [92m1.32e+00[0m
+  patch_embed       [92m5.20e-01[0m
+  cls_token         [92m6.10e-02[0m
+  pos_embed         [92m6.25e-02[0m
+  norm              [92m2.41e-02[0m
+  proj_head         [92m6.80e-01[0m
+  blocks.0          [92m4.97e-01[0m
+  blocks.1          [92m4.26e-01[0m
+  blocks.2          [92m3.93e-01[0m
+  blocks.3          [92m3.91e-01[0m
+  blocks.4          [92m3.74e-01[0m
+  blocks.5          [92m3.46e-01[0m
+  [2m──────────────────────────────────────────────[0m
+
+ 11/200  [92m -0.7712[0m  [93m  100.0%[0m    3.00e-04  [93m  0.2000[0m  [93m  0.0790[0m      15.5  [96m[1m★ best[0m[0m
+[2m10:37:44[0m  [96mℹ[0m  best mAP 0.0790 → runs/run_005/best_model.pth
+ 12/200  [92m -0.7746[0m  [93m  100.0%[0m    3.00e-04  [2m       —[0m  [2m       —[0m      10.8        
+ 13/200  [92m -0.7783[0m  [93m  100.0%[0m    3.00e-04  [2m       —[0m  [2m       —[0m      10.8        

@@ -1,0 +1,25 @@
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torchvision/transforms/v2/_deprecated.py:42: UserWarning: The transform `ToTensor()` is deprecated and will be removed in a future release. Instead, please use `v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])`.Output is equivalent up to float precision.
+  warnings.warn(
+
+device : cuda
+MergedDataset(real=52717, synthetic=192150, total=244867, identities=1802)
+
+[1m┌──────────────────────────────────────────────────────────────┐[0m
+[1m│                    VehicleViT — Training                     │[0m
+[1m├──────────────────────────────────────────────────────────────┤[0m
+[1m│  Run    : run_001                                            │[0m
+[1m│  Epochs : 1                                                  │[0m
+[1m│  CSV    : runs/run_001/metrics.csv                           │[0m
+[1m└──────────────────────────────────────────────────────────────┘[0m
+
+[2m──────────────────────────────────────────────────────────────────────[0m
+[2m   Epoch      Loss   Active%          LR    Rank-1       mAP   Time(s)[0m
+[2m──────────────────────────────────────────────────────────────────────[0m
+Traceback (most recent call last):
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py", line 152, in <module>
+    main(config_path=args.config)
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py", line 130, in main
+    eval_metrics = evaluate(model, query_loader, gallery_loader, device) \
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/engine/evaluate.py", line 120, in evaluate
+    sorted_vids = gallery_vehicle_ids[sorted_matrix[i]]
+RuntimeError: indices should be either on cpu or on the same device as the indexed tensor (cpu)

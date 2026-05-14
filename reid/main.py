@@ -12,6 +12,12 @@ Run:
 
 To disable the synthetic dataset: set synthetic_root to null in the YAML.
 To resume training:               set resume to the checkpoint path in the YAML.
+
+Evaluation modes (data.eval_mode in tiny_vit.yaml):
+    local    : splits real train into train/query/gallery using make_train_eval_split()
+               40 held-out identities never seen during training → mAP meaningful
+    official : uses image_query/ and image_test/ from the dataset
+               vehicleIDs absent (-1) → mAP not meaningful locally
 """
 
 import os
@@ -19,7 +25,7 @@ import argparse
 import yaml
 import torch
 
-from data.dataset          import VehicleReIDDataset, MergedDataset
+from data.dataset          import VehicleReIDDataset, MergedDataset, make_train_eval_split
 from data.dataloader       import (get_train_dataloader,
                                    get_query_dataloader,
                                    get_test_dataloader)
@@ -50,36 +56,77 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
     print(f"\ndevice : {device}")
 
     # ── datasets ──────────────────────────────────────────────────────────────
-    real_train = VehicleReIDDataset(
-        root      = os.path.join(data["real_root"], "image_train"),
-        label_xml = os.path.join(data["real_root"], "train_label.xml"),
-        transform = get_train_transform(),
-        id_offset = 0,
-    )
+    eval_mode = data.get("eval_mode", "local")
 
-    if data["synthetic_root"]:
-        synthetic_train = VehicleReIDDataset(
-            root      = os.path.join(data["synthetic_root"], "sys_image_train"),
-            label_xml = os.path.join(data["synthetic_root"], "train_label.xml"),
-            transform = get_train_transform(),
-            id_offset = max(real_train.labels),
+    if eval_mode == "local":
+        # ── proper 3-way split — no overlap between train and eval ────────────
+        # Load full real train once (no transform — make_train_eval_split applies them)
+        full_real = VehicleReIDDataset(
+            root      = os.path.join(data["real_root"], "image_train"),
+            label_xml = os.path.join(data["real_root"], "train_label.xml"),
+            transform = None,   # transforms applied inside make_train_eval_split
+            id_offset = 0,
         )
-        train_dataset = MergedDataset(real_train, synthetic_train)
-        print(f"{train_dataset}")
-    else:
-        train_dataset = real_train
-        print(f"{real_train}")
 
-    query_dataset = VehicleReIDDataset(
-        root      = os.path.join(data["real_root"], "image_query"),
-        label_xml = os.path.join(data["real_root"], "query_label.xml"),
-        transform = get_test_transform(),
-    )
-    gallery_dataset = VehicleReIDDataset(
-        root      = os.path.join(data["real_root"], "image_test"),
-        label_xml = os.path.join(data["real_root"], "test_label.xml"),
-        transform = get_test_transform(),
-    )
+        real_train_ds, query_dataset, gallery_dataset = make_train_eval_split(
+            dataset         = full_real,
+            n_eval_ids      = data.get("n_eval_ids", 40),
+            seed            = data.get("eval_seed", 42),
+            train_transform = get_train_transform(),
+            eval_transform  = get_test_transform(),
+        )
+
+        print(f"Train  : {real_train_ds}")
+        print(f"Query  : {query_dataset}")
+        print(f"Gallery: {gallery_dataset}")
+
+        # optionally merge synthetic on top of real train
+        if data["synthetic_root"]:
+            # synthetic uses real_train_ds max label as offset to avoid ID collisions
+            max_real_id = max(real_train_ds.labels)
+            synthetic_train = VehicleReIDDataset(
+                root      = os.path.join(data["synthetic_root"], "sys_image_train"),
+                label_xml = os.path.join(data["synthetic_root"], "train_label.xml"),
+                transform = get_train_transform(),
+                id_offset = max_real_id,
+            )
+            train_dataset = MergedDataset(real_train_ds, synthetic_train)
+            print(f"Merged : {train_dataset}")
+        else:
+            train_dataset = real_train_ds
+
+    else:
+        # ── official AIC21 splits — vehicleIDs absent → mAP not meaningful ───
+        real_train = VehicleReIDDataset(
+            root      = os.path.join(data["real_root"], "image_train"),
+            label_xml = os.path.join(data["real_root"], "train_label.xml"),
+            transform = get_train_transform(),
+            id_offset = 0,
+        )
+
+        if data["synthetic_root"]:
+            synthetic_train = VehicleReIDDataset(
+                root      = os.path.join(data["synthetic_root"], "sys_image_train"),
+                label_xml = os.path.join(data["synthetic_root"], "train_label.xml"),
+                transform = get_train_transform(),
+                id_offset = max(real_train.labels),
+            )
+            train_dataset = MergedDataset(real_train, synthetic_train)
+            print(f"{train_dataset}")
+        else:
+            train_dataset = real_train
+            print(f"{real_train}")
+
+        query_dataset = VehicleReIDDataset(
+            root      = os.path.join(data["real_root"], "image_query"),
+            label_xml = os.path.join(data["real_root"], "query_label.xml"),
+            transform = get_test_transform(),
+        )
+        gallery_dataset = VehicleReIDDataset(
+            root      = os.path.join(data["real_root"], "image_test"),
+            label_xml = os.path.join(data["real_root"], "test_label.xml"),
+            transform = get_test_transform(),
+        )
 
     # ── dataloaders ───────────────────────────────────────────────────────────
     train_loader   = get_train_dataloader(
@@ -101,10 +148,13 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
         betas        = (0.9, 0.999),
     )
     scheduler = build_scheduler(optimizer, train["warmup_epochs"], train["epochs"])
-    loss_fn   = BatchHardTripletLoss(margin=train["margin"])
+    loss_fn   = BatchHardTripletLoss(
+        margin      = train["margin"],
+        lambda_unif = train.get("lambda_unif", 0.1),
+    )
 
     # ── monitoring ────────────────────────────────────────────────────────────
-    logger          = Logger(mon["run_name"], train["epochs"], mon["runs_dir"])
+    logger          = Logger(mon["run_name"], train["epochs"], mon["runs_dir"], config=cfg)
     grad_monitor    = GradientHealthMonitor(log_every_n_batches=mon["grad_every"])
     triplet_monitor = TripletHealthMonitor(log_every_n_batches=1)
 

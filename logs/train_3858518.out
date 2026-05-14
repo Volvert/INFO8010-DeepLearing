@@ -1,0 +1,72 @@
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torchvision/transforms/v2/_deprecated.py:42: UserWarning: The transform `ToTensor()` is deprecated and will be removed in a future release. Instead, please use `v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])`.Output is equivalent up to float precision.
+  warnings.warn(
+
+device : cuda
+MergedDataset(real=52717, synthetic=192150, total=244867, identities=1802)
+
+[1m┌──────────────────────────────────────────────────────────────┐[0m
+[1m│                    VehicleViT — Training                     │[0m
+[1m├──────────────────────────────────────────────────────────────┤[0m
+[1m│  Run    : run_001                                            │[0m
+[1m│  Epochs : 1                                                  │[0m
+[1m│  CSV    : runs/run_001/metrics.csv                           │[0m
+[1m└──────────────────────────────────────────────────────────────┘[0m
+
+[2m──────────────────────────────────────────────────────────────────────[0m
+[2m   Epoch      Loss   Active%          LR    Rank-1       mAP   Time(s)[0m
+[2m──────────────────────────────────────────────────────────────────────[0m
+/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/monitoring/plot.py:119: UserWarning: Data has no positive values, and therefore cannot be log-scaled.
+  ax.set(title="Learning Rate", xlabel="Epoch",
+/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/monitoring/plot.py:121: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  ax.legend(fontsize=8)
+/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/monitoring/plot.py:119: UserWarning: Data has no positive values, and therefore cannot be log-scaled.
+  ax.set(title="Learning Rate", xlabel="Epoch",
+/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/monitoring/plot.py:121: UserWarning: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+  ax.legend(fontsize=8)
+  1/1  [91m  0.8083[0m  [93m  100.0%[0m    1.00e-10  [92m  1.0000[0m  [92m  0.8695[0m     124.6  [96m[1m★ best[0m[0m
+[2m21:29:02[0m  [96mℹ[0m  best mAP 0.8695 → runs/run_001/best_model.pth
+
+[1m  Triplet Health  epoch 0[0m  [93m● early phase[0m
+  [2m──────────────────────────────────────────────[0m
+  active              100.0%
+  mean d(a,p)         1.1008  ← should decrease
+  mean d(a,n)         0.5925  ← should increase
+  gap                 -0.5083  ← margin = 0.3
+  [2m──────────────────────────────────────────────[0m
+
+
+[1m  Gradient Health[0m  [92m✓ healthy[0m
+  [2m──────────────────────────────────────────────[0m
+  global            [93m5.08e+00[0m
+  patch_embed       [93m3.28e+00[0m
+  cls_token         [92m4.33e-01[0m
+  pos_embed         [92m4.36e-01[0m
+  norm              [92m6.47e-02[0m
+  proj_head         [92m8.76e-01[0m
+  blocks.0          [93m2.43e+00[0m
+  blocks.1          [92m1.70e+00[0m
+  blocks.2          [92m1.36e+00[0m
+  blocks.3          [92m1.13e+00[0m
+  blocks.4          [92m1.02e+00[0m
+  blocks.5          [92m9.54e-01[0m
+  [2m──────────────────────────────────────────────[0m
+
+
+📊  Plotting 1 epochs → runs/run_001/plots/
+   ✓ 01_loss.png
+   ✓ 02_retrieval.png
+   ✓ 03_active_pct.png
+   ✓ 04_lr.png
+   ✓ 05_triplet_gap.png
+   ✓ 06_grad_norms.png
+   ✓ 00_dashboard.png
+
+
+[1m┌──────────────────────────────────────────────────────────────┐[0m
+[1m│                      Training Complete                       │[0m
+[1m├──────────────────────────────────────────────────────────────┤[0m
+[1m│  Best mAP : 0.8695  [92m✓ beats 36% baseline[0m         │[0m
+[1m│  CSV      : runs/run_001/metrics.csv                         │[0m
+[1m│  Ckpt     : runs/run_001/best_model.pth                      │[0m
+[1m└──────────────────────────────────────────────────────────────┘[0m
+

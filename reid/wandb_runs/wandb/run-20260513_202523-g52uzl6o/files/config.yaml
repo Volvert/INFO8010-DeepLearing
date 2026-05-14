@@ -1,0 +1,160 @@
+_wandb:
+    value:
+        cli_version: 0.26.1
+        e:
+            kezl6920wr0f0nscidf12ujqsqxe3gr9:
+                args:
+                    - --config
+                    - config/tiny_vit.yaml
+                codePath: reid/main.py
+                codePathLocal: main.py
+                cpu_count: 128
+                cpu_count_logical: 256
+                cudaVersion: "12.4"
+                disk:
+                    /:
+                        total: "274743689216"
+                        used: "12342804480"
+                email: florent.volvert@gmail.com
+                executable: /home/fvolvert/anaconda3/envs/myenv/bin/python
+                git:
+                    commit: 329cd5b98de1d5453d77f65c2706b8409bd5e198
+                    remote: https://github.com/Volvert/INFO8010-DeepLearning-Nvidia-Project.git
+                gpu: NVIDIA RTX A5000
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-2116de4c-0b46-3aff-87de-d8030a3d1dff
+                host: compute-15
+                memory:
+                    total: "269708759040"
+                os: Linux-4.18.0-448.el8.x86_64-x86_64-with-glibc2.28
+                program: /home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py
+                python: CPython 3.10.20
+                root: wandb_runs
+                slurm:
+                    cluster_name: alan
+                    conf: /etc/slurm/slurm.conf
+                    cpus_on_node: "4"
+                    cpus_per_task: "4"
+                    gpus: "1"
+                    gtids: "0"
+                    job_account: students
+                    job_cpus_per_node: "4"
+                    job_gid: "1228200300"
+                    job_gpus: "0"
+                    job_id: "3860244"
+                    job_name: vehicle_reid
+                    job_nodelist: compute-15
+                    job_num_nodes: "1"
+                    job_partition: all
+                    job_qos: students
+                    job_uid: "1228200300"
+                    job_user: fvolvert
+                    jobid: "3860244"
+                    localid: "0"
+                    mem_per_node: "16384"
+                    nnodes: "1"
+                    node_aliases: (null)
+                    nodeid: "0"
+                    nodelist: compute-15
+                    prio_process: "0"
+                    procid: "0"
+                    submit_dir: /home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid
+                    submit_host: master
+                    task_pid: "3761885"
+                    tasks_per_node: "1"
+                    topology_addr: compute-15
+                    topology_addr_pattern: node
+                    working_cluster: alan:master:6817:8960:109
+                startedAt: "2026-05-13T18:25:23.372958Z"
+                writerId: kezl6920wr0f0nscidf12ujqsqxe3gr9
+        m:
+            - "1": epoch
+              "6":
+                - 3
+              "7": []
+            - "1": eval/mAP_baseline
+              "5": 1
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "2": train/*
+              "5": 1
+              "6":
+                - 1
+              "7": []
+            - "2": eval/*
+              "5": 1
+              "6":
+                - 1
+              "7": []
+            - "2": triplet/*
+              "5": 1
+              "6":
+                - 1
+              "7": []
+            - "2": grad/*
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.10.20
+        t:
+            "1":
+                - 1
+                - 41
+            "2":
+                - 1
+                - 41
+            "3":
+                - 2
+                - 7
+                - 13
+                - 16
+                - 61
+                - 62
+            "4": 3.10.20
+            "5": 0.26.1
+            "12": 0.26.1
+            "13": linux-x86_64
+data:
+    value:
+        K: 4
+        P: 16
+        eval_batch_size: 128
+        eval_mode: local
+        num_workers: 4
+        real_root: /home/fvolvert/datasets/AICity21_Track2_ReID
+        synthetic_root: /home/fvolvert/datasets/AICity21_Track2_ReID_Simulation
+model:
+    value:
+        d_model: 192
+        depth: 6
+        dropout: 0.1
+        embed_dim: 128
+        img_size: 224
+        in_channels: 3
+        mlp_ratio: 4
+        num_heads: 8
+        patch_size: 16
+monitoring:
+    value:
+        eval_every: 5
+        grad_every: 1
+        run_name: run_004
+        runs_dir: runs
+        wandb_dir: wandb_runs
+training:
+    value:
+        epochs: 50
+        lambda_unif: 0.1
+        lr: 0.0001
+        margin: 0.1
+        resume: null
+        warmup_epochs: 5
+        weight_decay: 0.01

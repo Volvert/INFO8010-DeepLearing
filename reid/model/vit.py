@@ -167,7 +167,12 @@ class VehicleViT(nn.Module):
         L2 normalization is applied in forward() after this layer —
         not here, because it is not a learnable operation.
         """
-        self.proj_head = nn.Linear(d_model, embed_dim)
+        self.proj_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.BatchNorm1d(d_model),
+            nn.GELU(),
+            nn.Linear(d_model, embed_dim),
+        )
 
         # =====================================================================
         # weight initialization

@@ -1,0 +1,18 @@
+/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/site-packages/torchvision/transforms/v2/_deprecated.py:42: UserWarning: The transform `ToTensor()` is deprecated and will be removed in a future release. Instead, please use `v2.Compose([v2.ToImage(), v2.ToDtype(torch.float32, scale=True)])`.Output is equivalent up to float precision.
+  warnings.warn(
+
+device : cuda
+Traceback (most recent call last):
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py", line 152, in <module>
+    main(config_path=args.config)
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py", line 53, in main
+    real_train = VehicleReIDDataset(
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/data/dataset.py", line 111, in __init__
+    self._parse_xml(label_xml)
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/data/dataset.py", line 131, in _parse_xml
+    tree = ET.parse(label_xml)
+  File "/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/xml/etree/ElementTree.py", line 1222, in parse
+    tree.parse(source, parser)
+  File "/home/fvolvert/anaconda3/envs/myenv/lib/python3.10/xml/etree/ElementTree.py", line 580, in parse
+    self._root = parser._parse_whole(source)
+ValueError: multi-byte encodings are not supported

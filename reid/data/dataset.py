@@ -31,36 +31,25 @@ This eliminates ID collisions before the datasets are combined.
 Concatenates one real and one synthetic VehicleReIDDataset into a single
 Dataset that exposes a flat .labels list — required by PKSampler.
 
-torch.utils.data.ConcatDataset would work for __getitem__ routing but does
-NOT expose .labels, which PKSampler needs to group images by identity.
-MergedDataset fills that gap with minimal code.
+--- make_train_eval_split ---
 
-Typical usage in main.py:
+Proper 3-way split with NO overlap between train and eval:
+  - 40 held-out identities → never seen during training
+  - train_ds  : all images of the 400 remaining identities
+  - query_ds  : 1 image per held-out identity
+  - gallery_ds: all remaining images of held-out identities
 
-    real      = VehicleReIDDataset(
-                    root      = "dataset/AIC21_Track2_ReID/image_train",
-                    label_xml = "dataset/AIC21_Track2_ReID/train_label.xml",
-                    transform = get_train_transform(),
-                    id_offset = 0,
-                )
-
-    synthetic = VehicleReIDDataset(
-                    root      = "dataset/AIC21_Track2_ReID_Simulation/sys_image_train",
-                    label_xml = "dataset/AIC21_Track2_ReID_Simulation/train_label.xml",
-                    transform = get_train_transform(),
-                    id_offset = max(real.labels),   # 440 → synthetic becomes 441-1802
-                )
-
-    train = MergedDataset(real, synthetic)
-    # train.labels  : 244 867 entries, IDs 1-1802, no collision
-    # len(train)    : 244 867
+This is the standard academic Re-ID evaluation protocol when
+the official test ground truth is unavailable (AIC21 keeps it secret).
 
 See: data/batch.py      — PKSampler reads dataset.labels
 See: data/dataloader.py — get_train_dataloader passes dataset to PKSampler
 """
 
 import os
+import random
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from PIL import Image
 from torch.utils.data import Dataset
 
@@ -89,105 +78,38 @@ class VehicleReIDDataset(Dataset):
         transform = None,
         id_offset: int = 0,
     ):
-        """
-        Args:
-            root      : path to the image folder
-                        e.g. "dataset/AIC21_Track2_ReID/image_train"
-            label_xml : path to the XML annotation file
-                        e.g. "dataset/AIC21_Track2_ReID/train_label.xml"
-            transform : transform pipeline — get_train_transform() for train,
-                        get_test_transform() for query and gallery
-            id_offset : integer added to every vehicle_id at parse time.
-                        default 0 for real data (IDs unchanged).
-                        pass max(real.labels) for synthetic data to avoid
-                        ID collisions when both datasets are merged.
-        """
         self.root      = root
         self.transform = transform
         self.id_offset = id_offset
         self.samples: list[tuple[str, int, int]] = []
         self.labels:  list[int]                  = []
-
         self._parse_xml(label_xml)
 
-    # =========================================================================
-    # _parse_xml
-    # =========================================================================
-
     def _parse_xml(self, label_xml: str) -> None:
-        """
-        Reads the XML annotation file and populates self.samples and self.labels.
-
-        Called once in __init__. After this method returns:
-            len(self.samples) == len(self.labels) == number of images in the split.
-
-        The id_offset is added to vehicle_id here — at the source — so that
-        all downstream code (PKSampler, BatchHardTripletLoss, MergedDataset)
-        sees correct, non-colliding IDs without any extra logic.
-
-        Args:
-            label_xml : path to XML file (real or synthetic format)
-        """
         tree = ET.parse(label_xml)
         root = tree.getroot()
-
         for item in root.iter("Item"):
-
-            name = item.get("imageName")                    # "000001.jpg" or "00001_c006_1.jpg"
-
-            vehicle_id = int(item.get("vehicleID", -1))    # "0269" → 269
-            vehicle_id += self.id_offset                   # 269 + 0 = 269  (real)
-                                                           # 1   + 440 = 441 (synthetic)
-
-            camera_id = int(item.get("cameraID")[1:])      # "c036" → 36
-
-            img_path = os.path.join(self.root, name)
-
+            name       = item.get("imageName")
+            vehicle_id = int(item.get("vehicleID", -1)) + self.id_offset
+            camera_id  = int(item.get("cameraID")[1:])
+            img_path   = os.path.join(self.root, name)
             self.samples.append((img_path, vehicle_id, camera_id))
             self.labels.append(vehicle_id)
 
-    # =========================================================================
-    # __len__
-    # =========================================================================
-
     def __len__(self) -> int:
-        """Total number of images in this split."""
         return len(self.samples)
 
-    # =========================================================================
-    # __getitem__
-    # =========================================================================
-
     def __getitem__(self, idx: int):
-        """
-        Loads one image and returns it with its labels.
-
-        Falls back to the next sample if the image file is corrupted or missing,
-        so that a single bad file never crashes a training run.
-
-        Returns:
-            image      : torch.Tensor (3, H, W) after transform, else PIL Image
-            vehicle_id : int — identity label (offset already applied)
-            camera_id  : int — camera index
-        """
         img_path, vehicle_id, camera_id = self.samples[idx]
-
         try:
             image = Image.open(img_path).convert("RGB")
         except Exception:
             return self.__getitem__((idx + 1) % len(self.samples))
-
         if self.transform is not None:
             image = self.transform(image)
-
         return image, vehicle_id, camera_id
 
-    # =========================================================================
-    # get_num_identities / __repr__
-    # =========================================================================
-
     def get_num_identities(self) -> int:
-        """Number of unique vehicle identities in this split."""
         return len(set(self.labels))
 
     def __repr__(self) -> str:
@@ -206,69 +128,22 @@ class VehicleReIDDataset(Dataset):
 class MergedDataset(Dataset):
     """
     Concatenates a real and a synthetic VehicleReIDDataset into one Dataset.
-
-    Both datasets must already have non-colliding vehicle IDs — apply id_offset
-    when instantiating the synthetic VehicleReIDDataset, not here.
-
-    The only job of this class is to:
-        1. expose a flat .labels list → required by PKSampler
-        2. route __getitem__ to the correct sub-dataset
-
-    Attributes:
-        real      : VehicleReIDDataset — real training split
-        synthetic : VehicleReIDDataset — synthetic training split
-        labels    : list[int] — concatenation of both .labels lists
-        _n_real   : int — length of real dataset (boundary for __getitem__ routing)
+    Exposes a flat .labels list required by PKSampler.
     """
 
-    def __init__(
-        self,
-        real:      VehicleReIDDataset,
-        synthetic: VehicleReIDDataset,
-    ):
-        """
-        Args:
-            real      : VehicleReIDDataset loaded with id_offset=0
-            synthetic : VehicleReIDDataset loaded with id_offset=max(real.labels)
-        """
+    def __init__(self, real: VehicleReIDDataset, synthetic: VehicleReIDDataset):
         self.real      = real
         self.synthetic = synthetic
         self._n_real   = len(real)
-
-        # flat label list — what PKSampler reads
-        # real labels stay as-is, synthetic labels already have the offset
-        self.labels = real.labels + synthetic.labels
-
-    # =========================================================================
-    # __len__
-    # =========================================================================
+        self.labels    = real.labels + synthetic.labels
 
     def __len__(self) -> int:
-        """Total images across both datasets."""
         return len(self.real) + len(self.synthetic)
 
-    # =========================================================================
-    # __getitem__
-    # =========================================================================
-
     def __getitem__(self, idx: int):
-        """
-        Routes idx to the correct sub-dataset.
-
-        Indices 0 … n_real-1          → real dataset
-        Indices n_real … n_real+n_syn-1 → synthetic dataset
-
-        Returns:
-            (image, vehicle_id, camera_id) — same tuple as VehicleReIDDataset
-        """
         if idx < self._n_real:
             return self.real[idx]
-        else:
-            return self.synthetic[idx - self._n_real]
-
-    # =========================================================================
-    # __repr__
-    # =========================================================================
+        return self.synthetic[idx - self._n_real]
 
     def __repr__(self) -> str:
         return (
@@ -278,3 +153,112 @@ class MergedDataset(Dataset):
             f"total={len(self)}, "
             f"identities={len(set(self.labels))})"
         )
+
+
+# =============================================================================
+# _SubDataset
+# =============================================================================
+
+class _SubDataset(Dataset):
+    """
+    Lightweight dataset built from a pre-filtered list of samples.
+    Used by make_train_eval_split() for train, query and gallery splits.
+    """
+
+    def __init__(self, samples: list, transform=None):
+        self.samples   = samples
+        self.labels    = [s[1] for s in samples]
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        img_path, vehicle_id, camera_id = self.samples[idx]
+        try:
+            image = Image.open(img_path).convert("RGB")
+        except Exception:
+            return self.__getitem__((idx + 1) % len(self.samples))
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, vehicle_id, camera_id
+
+    def get_num_identities(self) -> int:
+        return len(set(self.labels))
+
+    def __repr__(self) -> str:
+        return (
+            f"_SubDataset("
+            f"images={len(self.samples)}, "
+            f"identities={self.get_num_identities()})"
+        )
+
+
+# =============================================================================
+# make_train_eval_split
+# =============================================================================
+
+def make_train_eval_split(
+    dataset:         "VehicleReIDDataset",
+    n_eval_ids:      int = 40,
+    seed:            int = 42,
+    train_transform       = None,
+    eval_transform        = None,
+) -> tuple["_SubDataset", "_SubDataset", "_SubDataset"]:
+    """
+    Splits a VehicleReIDDataset into 3 non-overlapping splits.
+
+    The 40 eval identities are NEVER seen during training — no data leakage.
+
+    Split sizes (AIC21 real, 440 identities, 52717 images):
+        train_ds   : ~400 identities, ~47800 images
+        query_ds   : 40 images (1 per eval identity)
+        gallery_ds : ~40 identities, ~4760 images
+
+        train_ds   : _SubDataset with train_transform (augmentations)
+        query_ds   : 1 image per held-out identity, eval_transform
+        gallery_ds : remaining images of held-out identities, eval_transform
+
+    Args:
+        dataset         : VehicleReIDDataset — full training split
+        n_eval_ids      : identities held out for evaluation (default 40)
+        seed            : random seed for reproducibility
+        train_transform : augmentation pipeline for training images
+        eval_transform  : no-augmentation pipeline for query/gallery
+
+    Returns:
+        train_ds, query_ds, gallery_ds
+    """
+    rng = random.Random(seed)
+
+    # group sample indices by vehicle_id
+    id_to_indices: dict[int, list[int]] = defaultdict(list)
+    for idx, (_, vid, _) in enumerate(dataset.samples):
+        id_to_indices[vid].append(idx)
+
+    # pick n_eval_ids held-out identities — sorted then shuffled for reproducibility
+    all_ids = sorted(id_to_indices.keys())
+    rng.shuffle(all_ids)
+    eval_ids = set(all_ids[:n_eval_ids])
+
+    train_samples:   list = []
+    query_samples:   list = []
+    gallery_samples: list = []
+
+    for vid, indices in id_to_indices.items():
+        local_rng = random.Random(seed + vid)
+        local_rng.shuffle(indices)
+
+        if vid in eval_ids:
+            # held-out: 1 image → query, rest → gallery
+            query_samples.append(dataset.samples[indices[0]])
+            gallery_samples.extend(dataset.samples[i] for i in indices[1:])
+        else:
+            # training identity: all images → train
+            train_samples.extend(dataset.samples[i] for i in indices)
+
+    train_ds   = _SubDataset(train_samples,   train_transform)
+    query_ds   = _SubDataset(query_samples,   eval_transform)
+    gallery_ds = _SubDataset(gallery_samples, eval_transform)
+
+    return train_ds, query_ds, gallery_ds

@@ -103,7 +103,7 @@ def evaluate(
     gallery_camera_ids = torch.cat(gallery_camera_ids) # (31238,)
 
     # cosine distance matrix — valid because embeddings are L2-normalized
-    dist_matrix = (1 - query_embeddings @ gallery_embeddings.T).to(device)
+    dist_matrix = (1 - query_embeddings @ gallery_embeddings.T)
 
     # sort each row by ascending distance -> gallery indices ranked by similarity
     sorted_matrix = torch.argsort(dist_matrix, dim=1)
@@ -134,8 +134,12 @@ def evaluate(
         if len(good_positions) == 0:
             ap_list.append(torch.tensor(0.0))
         else:
-            num = torch.arange(1, len(good_positions) + 1).float()
-            denom = good_positions.float() + 1
+            valid_mask = ~same_mask
+            cumulative_valid = torch.cumsum(valid_mask.float(), dim=0)
+            good_valid_positions = cumulative_valid[good_positions] - 1  # 0-indexed parmi valid
+
+            num = torch.arange(1, len(good_valid_positions) + 1).float()
+            denom = good_valid_positions.float() + 1
             ap_list.append((num / denom).mean())
 
     return {
