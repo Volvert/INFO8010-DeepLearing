@@ -6,44 +6,34 @@ This file implements the evaluation pipeline for vehicle Re-ID.
 main.py calls evaluate() after each epoch to compute Rank-1 and mAP
 on the query / gallery splits.
 
-No training happens here — gradients are disabled and dropout is off.
+No training — gradients disabled, dropout off (model.eval()).
 
 Evaluation steps:
-  1. extract query embeddings : model.eval() + no_grad()
-                                  forward pass on 1103 query images
-                                  -> (1103, 128) L2-normalized embeddings
+  1. extract query embeddings : model.eval() + no_grad() -> (N_query,   128) L2-normalized embeddings
 
-  2. extract gallery embeddings : same pipeline on 31238 gallery images
-                                  -> (31238, 128) L2-normalized embeddings
+  2. extract gallery embeddings : same pipeline -> (N_gallery, 128) L2-normalized embeddings
 
-  3. distance matrix : 1 - query_emb @ gallery_emb.T
-                                  -> (1103, 31238) cosine distances
-                                  valid because all embeddings are L2-normalized
+  3. distance matrix : 1 - query_emb @ gallery_emb.T -> (N_query, N_gallery) cosine distances valid because all embeddings are L2-normalized
 
-  4. sort by distance : argsort ascending per query row
-                                  -> ranked gallery indices per query
+  4. sort by distance: argsort ascending per query row -> ranked gallery indices per query
 
-  5. per-query loop : reorder gallery labels into ranking order
-                                  same vehicle + same camera     -> ignored
-                                  same vehicle + different camera -> true positive
+  5. per-query loop: reorder gallery labels into ranking order same vehicle + same camera -> ignored same vehicle + different camera -> true positive
 
   6. Rank-1 : fraction of queries where top-1 is correct
 
-  7. mAP : mean Average Precision over all 1103 queries
-                                  AP_i = (1/R_i) sum_k P(k) * rel(k)
-                                  mAP  = mean(AP_i)
+  7. mAP : mean Average Precision over all queries, AP_i = mean( precision at each true positive rank ) mAP  = mean(AP_i)
 
-evaluate() returns a dict consumed by main.py:
-  {
-    "rank1" : float  — fraction of correct top-1 retrievals  [0, 1]
-    "mAP"   : float  — mean Average Precision over all queries [0, 1]
-  }
+Splits depend on eval_mode in tiny_vit.yaml:
+    local    : query/gallery from make_train_eval_split() — sizes vary
+    official : image_query/ (1103) + image_test/ (31238)
+
+Returns:
+    {"rank1": float, "mAP": float}  — both in [0, 1]
 
 Target: beat the 36.0% val mAP cross-entropy baseline of the 2021 winners.
 
 See: engine/evaluate.md — full theory and metric justification
 See: data/dataloader.py — get_query_dataloader, get_test_dataloader
-See: https://www.aicitychallenge.org/2021-evaluation-system/
 """
 
 import torch
@@ -56,19 +46,6 @@ def evaluate(
     gallery_loader: DataLoader,
     device: torch.device,
 ) -> dict:
-    """
-    Extracts embeddings, computes the distance matrix and returns Rank-1 and mAP.
-
-    Args:
-        model : VehicleViT — eval mode and no_grad applied inside
-        query_loader : sequential dataloader over image_query/
-        gallery_loader : sequential dataloader over image_test/
-        device : torch.device — tensors moved here before forward pass
-
-    Returns:
-        dict with rank1 and mAP, both floats in [0, 1]
-    """
-
     model.eval()
 
     with torch.no_grad():

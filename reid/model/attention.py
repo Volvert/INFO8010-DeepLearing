@@ -45,16 +45,16 @@ class MultiHeadSelfAttention(nn.Module):
     Each token attends to every other token in the sequence simultaneously.
     8 parallel heads each learn a different type of relation between tokens.
 
-    Input  : (batch_size, seq_len, d_model)   e.g. (64, 197, 192)
-    Output : (batch_size, seq_len, d_model)   e.g. (64, 197, 192) — same shape as input
+    Input  : (batch_size, seq_len, d_model) -> (64, 197, 192)
+    Output : (batch_size, seq_len, d_model) -> (64, 197, 192) — same shape as input
 
     Attributes:
-        d_model   : int        — token dimension
-        num_heads : int        — number of parallel attention heads
-        d_k       : int        — dimension per head (d_model // num_heads)
-        scale     : float      — 1 / sqrt(d_k) — precomputed, avoids recomputing
-        qkv_proj  : nn.Linear  — fused W_Q, W_K, W_V  (d_model -> 3*d_model)
-        out_proj  : nn.Linear  — output projection W_O (d_model -> d_model)
+        d_model : int — token dimension
+        num_heads : int — number of parallel attention heads
+        d_k : int — dimension per head (d_model // num_heads)
+        scale : float — 1 / sqrt(d_k) — precomputed, avoids recomputing
+        qkv_proj : nn.Linear — fused W_Q, W_K, W_V  (d_model -> 3*d_model)
+        out_proj : nn.Linear — output projection W_O (d_model -> d_model)
         attn_drop : nn.Dropout — dropout on attention weights after softmax
     """
 
@@ -70,38 +70,27 @@ class MultiHeadSelfAttention(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model)       # W_O
         self.attn_drop = nn.Dropout(dropout)
 
-    # =========================================================================
-    # forward
-    # =========================================================================
-    """
+   """
     Full attention pass from input token sequence to updated token sequence.
     Called automatically when you do attention(x).
     Every token queries all others, collects weighted value vectors,
     and returns an enriched sequence of the same shape.
 
     Step-by-step:
-      1. qkv_proj  : (batch_size, 197, 192) -> (batch_size, 197, 576)           fused Q K V projection
-      2. reshape   : (batch_size, 197, 576) -> (batch_size, 197, 8, 72)         split into heads
-      3. permute   : (batch_size, 197, 8, 72) -> (batch_size, 8, 197, 72)       heads before sequence
-      4. chunk     : 3 x (batch_size, 8, 197, 24)                               separate Q, K, V
-      5. scores    : Q @ K^T / sqrt(24) -> (batch_size, 8, 197, 197)            similarity matrix
-      6. softmax   : (batch_size, 8, 197, 197)                                  attention weights
-      7. dropout   : stochastic regularization on weights
-      8. AV        : weights @ V -> (batch_size, 8, 197, 24)                    weighted sum of values
-      9. concat    : (batch_size, 197, 192)                                     merge 8 heads
-     10. out_proj  : W_O -> (batch_size, 197, 192)                              final projection
+      1. qkv_proj : (batch_size, 197, 192) -> (batch_size, 197, 576) fused Q K V projection
+      2. reshape : (batch_size, 197, 576) -> (batch_size, 197, 8, 72) split into heads
+      3. permute : (batch_size, 197, 8, 72) -> (batch_size, 8, 197, 72) heads before sequence
+      4. chunk : 3 x (batch_size, 8, 197, 24) separate Q, K, V
+      5. scores : Q @ K^T / sqrt(24) -> (batch_size, 8, 197, 197) similarity matrix
+      6. softmax : (batch_size, 8, 197, 197) attention weights
+      7. dropout : stochastic regularization on weights
+      8. AV : weights @ V -> (batch_size, 8, 197, 24) weighted sum of values
+      9. concat : (batch_size, 197, 192) merge 8 heads
+     10. out_proj : W_O -> (batch_size, 197, 192) final projection
     """
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x : (batch_size, seq_len, d_model) — input token sequence
-                e.g. (64, 197, 192)
 
-        Returns:
-            output : (batch_size, seq_len, d_model) — updated token sequence
-                     same shape as input — each token enriched by global context
-        """
         batch_size, seq_len, _ = x.shape
 
         qkv = self.qkv_proj(x) # (batch_size, seq_len, 3*d_model)

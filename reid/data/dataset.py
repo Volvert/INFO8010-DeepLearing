@@ -5,7 +5,7 @@
 Defines two dataset classes used throughout the project:
 
   VehicleReIDDataset — loads one split (train / query / test) from XML + images
-  MergedDataset      — combines real + synthetic train sets for PKSampler
+  MergedDataset — combines real + synthetic train sets for PKSampler
 
 --- VehicleReIDDataset ---
 
@@ -13,7 +13,7 @@ Reads the XML annotation file and image folder, exposes the standard
 PyTorch Dataset interface (.__len__, .__getitem__).
 
 Compatible with both XML formats in the project:
-  Real      (gb2312) : <Item imageName="000001.jpg" vehicleID="0269" cameraID="c026" />
+  Real (gb2312) : <Item imageName="000001.jpg" vehicleID="0269" cameraID="c026" />
   Synthetic (utf-8)  : <Item imageName="00001_c006_1.jpg" vehicleID="0001" cameraID="c006"
                              colorID="10" typeID="10" orientation="266.1" ... />
 
@@ -35,8 +35,8 @@ Dataset that exposes a flat .labels list — required by PKSampler.
 
 Proper 3-way split with NO overlap between train and eval:
   - 40 held-out identities -> never seen during training
-  - train_ds  : all images of the 400 remaining identities
-  - query_ds  : 1 image per held-out identity
+  - train_ds: all images of the 400 remaining identities
+  - query_ds: 1 image per held-out identity
   - gallery_ds: all remaining images of held-out identities
 
 This is the standard academic Re-ID evaluation protocol when
@@ -53,23 +53,7 @@ from collections import defaultdict
 from PIL import Image
 from torch.utils.data import Dataset
 
-
-# =============================================================================
-# VehicleReIDDataset
-# =============================================================================
-
 class VehicleReIDDataset(Dataset):
-    """
-    Loads vehicle images and their labels from an AIC21-format dataset.
-    Returns (image_tensor, vehicle_id, camera_id) for each sample.
-
-    Attributes:
-        root      : str  — path to image directory
-        transform : callable | None — torchvision transform pipeline
-        samples   : list of (img_path, vehicle_id, camera_id)
-        labels    : list of vehicle_id — parallel to samples
-                    read by PKSampler to build P×K identity batches
-    """
 
     def __init__(
         self,
@@ -120,16 +104,7 @@ class VehicleReIDDataset(Dataset):
             f"offset={self.id_offset})"
         )
 
-
-# =============================================================================
-# MergedDataset
-# =============================================================================
-
 class MergedDataset(Dataset):
-    """
-    Concatenates a real and a synthetic VehicleReIDDataset into one Dataset.
-    Exposes a flat .labels list required by PKSampler.
-    """
 
     def __init__(self, real: VehicleReIDDataset, synthetic: VehicleReIDDataset):
         self.real = real
@@ -154,16 +129,7 @@ class MergedDataset(Dataset):
             f"identities={len(set(self.labels))})"
         )
 
-
-# =============================================================================
-# _SubDataset
-# =============================================================================
-
 class _SubDataset(Dataset):
-    """
-    Lightweight dataset built from a pre-filtered list of samples.
-    Used by make_train_eval_split() for train, query and gallery splits.
-    """
 
     def __init__(self, samples: list, transform=None):
         self.samples = samples
@@ -193,11 +159,6 @@ class _SubDataset(Dataset):
             f"identities={self.get_num_identities()})"
         )
 
-
-# =============================================================================
-# make_train_eval_split
-# =============================================================================
-
 def make_train_eval_split(
     dataset: "VehicleReIDDataset",
     n_eval_ids: int = 40,
@@ -205,30 +166,6 @@ def make_train_eval_split(
     train_transform = None,
     eval_transform = None,
 ) -> tuple["_SubDataset", "_SubDataset", "_SubDataset"]:
-    """
-    Splits a VehicleReIDDataset into 3 non-overlapping splits.
-
-    The 40 eval identities are NEVER seen during training — no data leakage.
-
-    Split sizes (AIC21 real, 440 identities, 52717 images):
-        train_ds   : ~400 identities, ~47800 images
-        query_ds   : 40 images (1 per eval identity)
-        gallery_ds : ~40 identities, ~4760 images
-
-        train_ds   : _SubDataset with train_transform (augmentations)
-        query_ds   : 1 image per held-out identity, eval_transform
-        gallery_ds : remaining images of held-out identities, eval_transform
-
-    Args:
-        dataset         : VehicleReIDDataset — full training split
-        n_eval_ids      : identities held out for evaluation (default 40)
-        seed            : random seed for reproducibility
-        train_transform : augmentation pipeline for training images
-        eval_transform  : no-augmentation pipeline for query/gallery
-
-    Returns:
-        train_ds, query_ds, gallery_ds
-    """
     rng = random.Random(seed)
 
     # group sample indices by vehicle_id

@@ -31,36 +31,8 @@ import random
 from collections import defaultdict
 from torch.utils.data import Sampler
 
-
-# =============================================================================
-# PKSampler
-# =============================================================================
-"""
-Inherits from torch.utils.data.Sampler
-PyTorch requires two methods:
-  __iter__ -> yields batches of indices in PK order
-  __len__  -> returns total number of indices per epoch
-"""
-
 class PKSampler(Sampler):
-    """
-    Samples indices such that each batch contains exactly
-    P identities with K images each.
-
-    Attributes:
-        labels     : list of vehicle_id parallel to dataset.sample used to group indices by identity
-        P          : number of identities per batch
-        K          : number of images per identity per batch
-        num_batches: number of batches per epoch
-    """
-
     def __init__(self, labels: list, P: int, K: int):
-        """
-        Args:
-            labels : list of vehicle_id for each image in the dataset comes from dataset.labels (built by _parse_xml)
-            P      : number of identities per batch (e.g. 16)
-            K      : number of images per identity  (e.g. 4)
-        """
         self.labels = labels
         self.P = P
         self.K = K
@@ -79,19 +51,6 @@ class PKSampler(Sampler):
 
         self._build_index()
 
-    # =========================================================================
-    # _build_index
-    # =========================================================================
-    """
-    Groups dataset indices by vehicle_id.
-    Called once in __init__.
-
-    After this method:
-      self.index_per_identity[vid] = [idx, idx, ...]  for each identity vid
-      self.unique_identities = [vid1, vid2, ...]
-      self.num_batches = len(unique_identities) // P
-    """
-
     def _build_index(self) -> None:
         """
         Builds self.index_per_identity, self.unique_identities
@@ -102,20 +61,6 @@ class PKSampler(Sampler):
 
         self.unique_identities = list(self.index_per_identity.keys())
         self.num_batches = len(self.unique_identities) // self.P
-
-    # =========================================================================
-    # __iter__
-    # =========================================================================
-    """
-    Called by the DataLoader at the start of each epoch.
-    Yields indices one by one in PK order.
-
-    Algorithm:
-      1. shuffle the list of unique identities
-      2. take P identities at a time
-      3. for each identity, sample K indices (with replacement if needed)
-      4. yield the P*K indices as a flat sequence
-    """
 
     def __iter__(self):
         """
@@ -135,15 +80,6 @@ class PKSampler(Sampler):
                     chosen = random.choices(list_of_idx, k=self.K)
 
                 yield from chosen
-
-
-    # =========================================================================
-    # __len__
-    # =========================================================================
-    """
-    Called by the DataLoader to know the total number of indices per epoch.
-    Must be consistent with __iter__ — same total count.
-    """
 
     def __len__(self) -> int:
         """Returns the total number of indices yielded per epoch."""

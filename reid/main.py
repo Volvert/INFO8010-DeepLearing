@@ -2,22 +2,22 @@
 # main.py
 # =============================================================================
 """
-Orchestrates the full training pipeline.
+Orchestrates the full training pipeline
 All configuration is read from config/tiny_vit.yaml — edit that file
-to change any hyperparameter, path, or monitoring setting.
+to change any hyperparameter, path, or monitoring setting
 
 Run:
     python main.py
     python main.py --config config/tiny_vit.yaml
 
-To disable the synthetic dataset: set synthetic_root to null in the YAML.
-To resume training:               set resume to the checkpoint path in the YAML.
+To disable the synthetic dataset: set synthetic_root to null in the YAML
+To resume training: set resume to the checkpoint path in the YAML
 
 Evaluation modes (data.eval_mode in tiny_vit.yaml):
-    local    : splits real train into train/query/gallery using make_train_eval_split()
-               40 held-out identities never seen during training → mAP meaningful
+    local : splits real train into train/query/gallery using make_train_eval_split()
+               40 held-out identities never seen during training -> mAP meaningful
     official : uses image_query/ and image_test/ from the dataset
-               vehicleIDs absent (-1) → mAP not meaningful locally
+               vehicleIDs absent (-1) -> mAP not meaningful locally
 """
 
 import os
@@ -41,7 +41,7 @@ from monitoring.plot import generate_all_plots
 
 def main(config_path: str = "config/tiny_vit.yaml") -> None:
 
-    # ── config ────────────────────────────────────────────────────────────────
+    #config
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
@@ -49,15 +49,15 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
     train = cfg["training"]
     mon = cfg["monitoring"]
 
-    # ── device ────────────────────────────────────────────────────────────────
+    # device 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\ndevice : {device}")
 
-    # ── datasets ──────────────────────────────────────────────────────────────
+    # datasets
     eval_mode = data.get("eval_mode", "local")
 
     if eval_mode == "local":
-        # ── proper 3-way split — no overlap between train and eval ────────────
+        # proper 3-way split — no overlap between train and eval
         # Load full real train once (no transform — make_train_eval_split applies them)
         full_real = VehicleReIDDataset(
             root = os.path.join(data["real_root"], "image_train"),
@@ -94,7 +94,7 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
             train_dataset = real_train_ds
 
     else:
-        # ── official AIC21 splits — vehicleIDs absent → mAP not meaningful ───
+        # official AIC21 splits — vehicleIDs absent -> mAP not meaningful as official challange
         real_train = VehicleReIDDataset(
             root = os.path.join(data["real_root"], "image_train"),
             label_xml = os.path.join(data["real_root"], "train_label.xml"),
@@ -126,14 +126,14 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
             transform = get_test_transform(),
         )
 
-    # ── dataloaders ───────────────────────────────────────────────────────────
+    # dataloaders
     train_loader = get_train_dataloader(train_dataset, data["P"], data["K"], data["num_workers"])
     
     query_loader = get_query_dataloader(query_dataset,   data["eval_batch_size"], data["num_workers"])
     
     gallery_loader = get_test_dataloader(gallery_dataset, data["eval_batch_size"], data["num_workers"])
 
-    # ── model / optimizer / scheduler / loss ──────────────────────────────────
+    # model / optimizer / scheduler / loss
     model = build_model(cfg["model"], device, checkpoint_path=train["resume"])
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -147,12 +147,12 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
         lambda_unif = train["lambda_unif"],
     )
 
-    # ── monitoring ────────────────────────────────────────────────────────────
+    # monitoring 
     logger = Logger(mon["run_name"], train["epochs"], mon["runs_dir"], config=cfg)
     grad_monitor = GradientHealthMonitor(log_every_n_batches=mon["grad_every"])
     triplet_monitor = TripletHealthMonitor(log_every_n_batches=1)
 
-    # ── epoch loop ────────────────────────────────────────────────────────────
+    # epoch loop 
     for epoch in range(train["epochs"]):
 
         logger.epoch_start()
@@ -177,13 +177,13 @@ def main(config_path: str = "config/tiny_vit.yaml") -> None:
 
         if logger.is_best():
             torch.save(model.state_dict(), logger.best_ckpt_path)
-            logger.log_message(f"best mAP {logger.best_mAP:.4f} → {logger.best_ckpt_path}")
+            logger.log_message(f"best mAP {logger.best_mAP:.4f} -> {logger.best_ckpt_path}")
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             triplet_monitor.report(train_metrics, epoch=epoch, margin=train["margin"])
             grad_monitor.report(train_metrics)
 
-    # ── post-training ─────────────────────────────────────────────────────────
+    # post-training
     generate_all_plots(run_dir=logger.run_dir, margin=train["margin"])
     logger.summary()
 

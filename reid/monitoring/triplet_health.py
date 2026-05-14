@@ -4,7 +4,7 @@
 """
 Computes triplet health statistics from embeddings after the forward pass.
 
-Called in train_one_epoch() BEFORE loss.backward() — embeddings are already
+Called in train_one_epoch() before loss.backward() — embeddings are already
 computed, distance matrix recomputation costs < 0.1ms on GPU.
 
 Returns a dict with keys prefixed "th_*" merged into train_metrics by
@@ -12,15 +12,12 @@ train_one_epoch() and logged to metrics.csv by logger.py.
 
 The 4 signals:
     th_active_fraction : fraction of anchors with loss > 0  (should decrease over training)
-    th_mean_d_pos      : mean hardest positive distance      (should decrease)
-    th_mean_d_neg      : mean hardest negative distance      (should increase)
-    th_gap             : th_mean_d_neg - th_mean_d_pos       (should grow above margin)
-    th_d_pos_std       : std of positive distances           (high = uneven clustering)
-    th_d_neg_std       : std of negative distances
-    th_collapse        : True if both d_pos and d_neg → 0   (embedding collapse)
-
-See: engine/train.py  — calls compute() and epoch_average()
-See: losses/tripletloss.py — same distance logic
+    th_mean_d_pos : mean hardest positive distance (should decrease)
+    th_mean_d_neg : mean hardest negative distance (should increase)
+    th_gap: th_mean_d_neg - th_mean_d_pos (should grow above margin)
+    th_d_pos_std : std of positive distances (high = unfaire clustering)
+    th_d_neg_std : std of negative distances
+    th_collapse: True if both d_pos and d_neg -> 0 (embedding collapse)
 """
 
 """

@@ -1,30 +1,6 @@
 # =============================================================================
 # GradientHealthMonitor
 # =============================================================================
-"""
-Reads .grad tensors after loss.backward() and returns per-group L2 norms.
-
-Must be called AFTER loss.backward() and BEFORE optimizer.step() — this is
-the only window where .grad is populated and readable.
-
-Returns a flat dict of gradient norms with keys prefixed "grad_norm_*",
-plus two anomaly flags "grad_vanishing" and "grad_exploding".
-All keys are merged into train_metrics by train_one_epoch() and passed
-to logger.log_epoch() for CSV storage and plot.py for visualization.
-
-Grouping strategy:
-    Parameters are grouped by architectural unit using str.startswith().
-    One L2 norm per group — readable and easy to plot.
-    Blocks are detected dynamically from model.named_parameters() so the
-    monitor works regardless of the depth set in tiny_vit.yaml.
-
-Thresholds:
-    global_norm > 10.0  → grad_exploding = True  → clipping triggered in train.py
-    any group   < 1e-6  → grad_vanishing  = True  → that layer is not learning
-
-See: engine/train.py — calls compute() after backward(), uses grad_exploding for clipping
-See: monitoring/logger.py — receives the returned dict via train_metrics
-"""
 
 """
 Monitoring code done with copilote help
