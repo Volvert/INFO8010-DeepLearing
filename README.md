@@ -486,6 +486,22 @@ Beat the **36.0% val mAP** cross-entropy baseline of the 2021 challenge winners.
 
 > **Current best : run_007 — mAP ~80% · Rank-1 ~85%** on local validation split (88 held-out identities, 2000 epochs from scratch)
 
+## Contributions
+
+Every line of Python code in this repository was written by the group from scratch. No existing re-ID codebase was used as a starting point.
+
+**Implemented from scratch:**
+
+The full ViT-Tiny architecture was implemented independently: patch embedding via Conv2d(k=16, s=16), multi-head self-attention with fused QKV projection (8 heads × 24-d), Pre-Norm encoder blocks (LayerNorm → MHA → skip → LayerNorm → FFN → skip), and a projection head (Linear→BN→GELU→Linear→L2 norm, 192→128-d). The batch-hard triplet loss was implemented with a correct negative mask and extended with a uniformity regularisation term to prevent embedding collapse. The full training infrastructure was built from scratch: PKSampler (P=20 × K=8), AdamW with linear warmup and cosine decay, evaluation engine (kNN search, Rank-1, mAP), and a complete monitoring system (gradient health, triplet health, embedding distances, WandB integration). Unit tests cover dataset parsing, loss correctness, model forward pass, and end-to-end pipeline.
+
+**With respect to the research question:**
+
+We successfully train a ViT from scratch on a 2021 CNN-dominated benchmark, achieving mAP 66% and Rank-1 77.5% on an internal 80/20 validation split —-demonstrating that modern attention-based architectures trained without any pretrained weights can produce meaningfull results.  Seven training runs progressively improved projection head design, training length, and hyperparameters to reach this result.
+
+**Reused or adapted:**
+
+The AIC21 Track 2 dataset and its evaluation protocol were provided by the NVIDIA AI City Challenge organisers. The batch-hard mining strategy follows Hermans et al. (2017), the ViT-Tiny hyperparameters follow Dosovitskiy et al. (2020), and the uniformity loss follows Wang et al. (2020), all three were used as conceptual references only, with code written independently.
+
 ---
 
 <sub>References: [AI City Challenge](https://www.aicitychallenge.org/2021-challenge-tracks/) · [VehicleX](https://github.com/yorkeyao/VehicleX) · [2021 winners (DMT)](https://github.com/michuanhaohao/AICITY2021_Track2_DMT) · [DINOv3](https://arxiv.org/abs/2508.10104)</sub>
