@@ -16,13 +16,15 @@ ready for the model. Four files with strictly separated responsibilities.
 flowchart LR
     XML("train_label.xml") -- "parsed once" --> D("dataset.py")
     T("data_transforms.py") -- "get_train_transform()\nget_test_transform()" --> D
-    D -- "dataset.labels" --> B("batch.py")
-    D -- "dataset" --> DL("dataloader.py")
+    D -- "make_train_eval_split()" --> S("400 train / 40 eval")
+    S -- "dataset.labels" --> B("batch.py")
+    S -- "dataset" --> DL("dataloader.py")
     B -- "PKSampler" --> DL
 
     style XML fill:#E1F5EE,stroke:#1D9E75,color:#085041
     style T fill:#EEF0FE,stroke:#7F77DD,color:#3C3489
     style D fill:#FFF4E5,stroke:#E8A020,color:#7A4500
+    style S fill:#FAECE7,stroke:#D85A30,color:#4A1B0C
     style B fill:#FFF4E5,stroke:#E8A020,color:#7A4500
     style DL fill:#E6F1FB,stroke:#378ADD,color:#0C447C
 ```
@@ -78,8 +80,45 @@ self.labels[i]  = vehicle_id
 `PKSampler` reads only `self.labels` — it never touches image files.
 
 `vehicleID` defaults to `-1` when absent — `query_label.xml` and `test_label.xml`
-do not carry `vehicleID` because it is the ground truth to predict. Providing it
-as input would be data leakage.
+do not carry `vehicleID` because it is the ground truth kept secret by the
+competition organisers. Providing it as input would be data leakage.
+
+### Local evaluation split — `make_train_eval_split()`
+
+Since the official test ground truth is unavailable locally, a proper 3-way
+split is constructed from `train_label.xml` via `make_train_eval_split()`:
+
+```
+full real train (440 identities, 52 717 images)
+    │
+    ├── train_ds   (400 identities, ~47 800 images) ← train_transform
+    ├── query_ds   (40 identities,  40 images)       ← eval_transform
+    └── gallery_ds (40 identities,  ~4 800 images)   ← eval_transform
+```
+
+The 40 eval identities are **never seen during training** — strict separation
+eliminates data leakage and produces meaningful mAP values.
+
+**Why 40 out of 440 (10%)?**
+
+In standard classification, 80/20 splits are common because the same classes
+appear in both train and test. Re-ID is fundamentally different — test identities
+must be **entirely unseen** during training, since the model must generalize to
+new vehicles, not memorize known ones.
+
+This changes the split logic entirely:
+
+- **Too few eval identities (e.g. 10)** — only 10 queries, statistically
+  unreliable mAP. A single lucky or unlucky query shifts the metric significantly.
+
+- **Too many eval identities (e.g. 80-100)** — 18-23% of identities withheld
+  from training. With only 52k images and a model training from scratch without
+  pretrained weights, reducing training diversity significantly hurts generalisation.
+
+- **40 identities (9%)** — follows the standard Re-ID evaluation protocol used
+  in the literature. Provides 40 queries and ~4 800 gallery images for statistically
+  meaningful metrics, while preserving 400 identities (91%) for training —
+  the right balance for a from-scratch model on a medium-sized dataset.
 
 ---
 
@@ -95,29 +134,29 @@ PKSampler guarantees every batch contains exactly:
 
 | | Value | Formula |
 |---|---|---|
-| Identities per batch | 16 | P |
-| Images per identity | 4 | K |
-| Batch size | 64 | P × K |
-| Positives per anchor | 3 | K − 1 |
-| Negatives per anchor | 60 | (P − 1) × K |
+| Identities per batch | 20 | P |
+| Images per identity | 8 | K |
+| Batch size | 160 | P × K |
+| Positives per anchor | 7 | K − 1 |
+| Negatives per anchor | 152 | (P − 1) × K |
 
 ### Algorithm
 
-At construction — ```_build_index``` groups all dataset indices by identity:
+At construction — `_build_index` groups all dataset indices by identity:
 
-$$\text{index per identity[vid]} = [idx₁, idx₂, idx₃, ...]$$
+$$\text{index per identity[vid]} = [idx_1, idx_2, idx_3, ...]$$
 
-At each epoch — ```__iter__``` shuffles the 440 identities, slices P at a time,
+At each epoch — `__iter__` shuffles the 400 training identities, slices P at a time,
 samples K indices per identity, yields all P×K indices as a flat sequence.
 
-$$\text{num}_\text{batches} = \lfloor 440/16 \rfloor = 27 \quad \Rightarrow \quad 27 \times 64 = 1728 \text{images per epoch}$$
+$$\text{num}_\text{batches} = \lfloor 400/20 \rfloor = 20 \quad \Rightarrow \quad 20 \times 160 = 3200 \text{ images per epoch}$$
 
-Not all 52 717 images are seen every epoch — coverage builds across epochs as
+Not all 47 800 images are seen every epoch — coverage builds across epochs as
 identities are reshuffled.
 
 ---
 
-## DataLoaders — ```data/dataloader.py```
+## DataLoaders — `data/dataloader.py`
 
 Three functions, one per split. The differences are deliberate:
 
@@ -126,7 +165,7 @@ Three functions, one per split. The differences are deliberate:
 | Sampler | PKSampler | none | none |
 | `shuffle` | forbidden | `False` | `False` |
 | `drop_last` | `True` | `False` | `False` |
-| `batch_size` | 64 | 128 | 128 |
+| `batch_size` | 160 | 128 | 128 |
 
 `drop_last=True` for train — an incomplete batch has fewer than P×K images and
 breaks the triplet loss structure.
