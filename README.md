@@ -28,7 +28,6 @@ such that same vehicle $\rightarrow$ close vectors, different vehicles $\rightar
 
 The project uses the **AI City Challenge 2021 Track 2** benchmark for city-scale vehicle re-identification.
 The dataset contains **85 058 cropped vehicle images** across **880 unique identities**, captured by **46 non-overlapping cameras** in real traffic conditions.
-A subset of images is synthetically generated via [VehicleX](https://github.com/yorkeyao/VehicleX) (3D-rendered vehicles) and merged into the training set to compensate for the limited real data.
 
 ---
 
