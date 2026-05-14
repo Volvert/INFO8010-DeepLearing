@@ -4,7 +4,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=0-6:00:00
+#SBATCH --time=0-8:00:00
 
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate myenv

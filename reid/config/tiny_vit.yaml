@@ -39,7 +39,7 @@ data:
   num_workers: 4
   eval_batch_size: 128
   eval_mode: local   # local = split train | official = query/test sans labels
-  n_eval_ids: 40
+  n_eval_ids: 88 # same as winner's paper
   eval_seed: 42
 
 
@@ -47,7 +47,7 @@ data:
 # Training hyperparameters
 # -----------------------------------------------------------------------------
 training:
-  epochs: 2000
+  epochs: 2500
   lr: 5.0e-4
   weight_decay: 0.01
   warmup_epochs: 100
