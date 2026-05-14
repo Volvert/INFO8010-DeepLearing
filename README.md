@@ -283,8 +283,7 @@ flowchart TD
         D1["CLS token\nnn.Parameter 1×192"]:::model
         D2["Prepend → 197 tokens"]:::model
         D3["+ Pos. Embedding\nnn.Parameter 197×192 learned"]:::model
-        D4["GAP — mean over 196 tokens\nalternative to CLS"]:::model
-        D1-->D2-->D3-->D4
+        D1-->D2-->D3
     end
 
     subgraph TR["⑥ Transformer ×6 — model/block.py + model/attention.py"]
