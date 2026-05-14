@@ -7,8 +7,8 @@ each addressing a distinct aspect of training stability and generalization.
 
 | Component | File | Value | Role |
 |---|---|---|---|
-| Optimizer | `engine/train.py` | AdamW `lr=1e-4, β₁=0.9, β₂=0.999, λ=0.01` | Adaptive per-parameter learning rate + decoupled weight decay |
-| Scheduler | `utils/scheduler.py` | Linear warmup 5 epochs + cosine decay to epoch 50 | Controls the global learning rate over time |
+| Optimizer | `engine/train.py` | AdamW `lr=5e-4, β₁=0.9, β₂=0.999, λ=0.01` | Adaptive per-parameter learning rate + decoupled weight decay |
+| Scheduler | `utils/scheduler.py` | Linear warmup 50 epochs + cosine decay to epoch 2000 | Controls the global learning rate over time |
 | Regularization | `model/block.py`, `model/vit.py` | Dropout `p=0.1` | Stochastic regularization inside the model |
 
 ---
@@ -27,59 +27,60 @@ wastes training time. The scheduler adapts $\gamma$ over time. (lec4 page 37)
 
 ---
 
-### Phase 1 — Linear warmup (epochs 0 → 5)
+### Phase 1 — Linear warmup (epochs 0 → 50)
 
 At epoch 0, all ViT weights are initialized with `trunc_normal(std=0.02)` — nearly random.
 The triplet loss computes distances between random embeddings → 100% of triplets are active
 → gradients are large and noisy in all directions simultaneously.
 
-Starting with `lr=1e-4` immediately causes the first updates to be too large —
+Starting with `lr=5e-4` immediately causes the first updates to be too large —
 random weights produce erratic gradients that can destroy the initialization before
 the model has a chance to stabilize.
 
 ```
-epoch 0 :  lr = 0.0
-epoch 1 :  lr = 0.2 × 1e-4
-epoch 2 :  lr = 0.4 × 1e-4
-epoch 3 :  lr = 0.6 × 1e-4
-epoch 4 :  lr = 0.8 × 1e-4
-epoch 5 :  lr = 1e-4   ← target lr reached
+epoch  0 :  lr = 0.0
+epoch 10 :  lr = 0.2 × 5e-4
+epoch 20 :  lr = 0.4 × 5e-4
+epoch 30 :  lr = 0.6 × 5e-4
+epoch 40 :  lr = 0.8 × 5e-4
+epoch 50 :  lr = 5e-4   ← target lr reached
 ```
 
 **Why linear and not cosine warmup ?**
-Over only 5 epochs the shape of the curve has negligible impact — what matters is
-the start (0) and the end (1e-4). Linear is the simplest and most interpretable.
+Over 50 epochs the shape of the curve has negligible impact — what matters is
+the start (0) and the end (5e-4). Linear is the simplest and most interpretable.
 
-**Why 5 epochs ?**
-5 epochs is enough for embeddings to move from fully random to an initial coherent
-structure — visible in `monitoring/triplet_health.py` when the active triplet fraction
-starts dropping below 100%.
+**Why 50 epochs ?**
+With `lr=5e-4` — higher than the standard `1e-4` — the model needs a longer
+stabilisation phase. 50 epochs gives the embeddings time to move from fully
+random to an initial coherent structure before the full learning rate kicks in.
 
 ---
 
-### Phase 2 — Cosine decay (epochs 5 → 50)
+### Phase 2 — Cosine decay (epochs 50 → 2000)
 
 After warmup, the learning rate decays smoothly following a cosine curve (lec4 page 39):
 
 $$\gamma_t = \gamma_{\min} + \frac{1}{2}(\gamma_{\max} - \gamma_{\min})\left(1 + \cos\left(\frac{t - t_{\text{warmup}}}{T - t_{\text{warmup}}} \cdot \pi\right)\right)$$
 
 ```
-epoch  5 :  lr = 1e-4     ← maximum
-epoch 20 :  lr ≈ 5e-5
-epoch 35 :  lr ≈ 1e-5
-epoch 50 :  lr ≈ 0        ← minimum
+epoch   50 :  lr = 5e-4      ← maximum
+epoch  500 :  lr ≈ 4e-4
+epoch 1000 :  lr ≈ 2.5e-4
+epoch 1500 :  lr ≈ 1e-4
+epoch 2000 :  lr ≈ 0         ← minimum
 ```
 
 ```
 lr
-1e-4 |          ___________
+5e-4 |          ___________
      |        /             \
      |      /                 \
      |    /                     \
      |  /                         \
    0 |/                             \___
      |-----|--------------------------|--→ epochs
-     0     5                         50
+     0    50                        2000
       warmup        cosine decay
 ```
 

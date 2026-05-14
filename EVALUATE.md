@@ -2,12 +2,17 @@
 
 ## Overview
 
-Evaluation runs after each epoch (or every N epochs) in `main.py`.
+Evaluation runs every 10 epochs in `main.py`.
 It extracts embeddings for all query and gallery images, computes the
 distance matrix, and returns Rank-1 and mAP — the two official metrics
 of the AI City Challenge 2021.
 
 **Target : beat the 36.0% val mAP cross-entropy baseline of the 2021 winners.**
+
+Since the official test ground truth is withheld by the competition organisers,
+we evaluate on a **local validation split** constructed from `train_label.xml`:
+88 held-out identities — never seen during training — serve as query and gallery.
+The remaining 352 identities are used exclusively for training.
 
 ---
 
@@ -17,6 +22,36 @@ Same vehicle + same camera = **ignored** (junk match).
 Same vehicle + different camera = **true positive**.
 This enforces genuine cross-camera retrieval — the core of the challenge.
 
+**Why ignore same-camera matches ?**
+If a vehicle is photographed multiple times by the same camera, those images
+are near-duplicates — retrieving them requires no understanding of vehicle identity,
+just texture matching. Ignoring them forces the model to generalize across viewpoints
+and lighting conditions.
+
+---
+
+## Local validation split
+
+```
+train_label.xml (440 identities, 52 717 images)
+    │
+    ├── train_ds   (352 identities, ~42 200 images)  ← training only, never evaluated
+    │
+    ├── query_ds   (88 identities,  88 images)        ← 1 image per held-out identity
+    │
+    └── gallery_ds (88 identities, ~10 500 images)    ← remaining images of held-out ids
+```
+
+The split is deterministic — fixed `seed=42` in `make_train_eval_split()`.
+The same 88 identities are always held out across all runs, making metrics
+directly comparable between experiments.
+
+**Why 88 identities ?**
+This follows the evaluation protocol of the 2021 winners, who used a similar
+fraction of training identities for local validation. 88/440 = 20% provides
+enough queries for statistically meaningful mAP while preserving 80% of
+identities for training diversity.
+
 ---
 
 ## Full evaluation flow
@@ -25,21 +60,21 @@ This enforces genuine cross-camera retrieval — the core of the challenge.
 flowchart TD
     A(["main.py\nmodel.eval() + torch.no_grad()"]) --> B
 
-    B["Extract query embeddings\nget_query_dataloader · 1103 images\nforward pass → 1103 × 128"] --> C
+    B["Extract query embeddings\n 88 images · batch_size=128\n forward pass → 88 × 128"] --> C
 
-    C["Extract gallery embeddings\nget_test_dataloader · 31238 images\nforward pass → 31238 × 128"] --> D
+    C["Extract gallery embeddings\n ~10 500 images · batch_size=128\n forward pass → 10500 × 128"] --> D
 
-    D["Distance matrix\n1 - query_emb @ gallery_emb.T\n1103 × 31238"] --> E
+    D["Distance matrix\n 1 - query_emb @ gallery_emb.T\n 88 × 10500"] --> E
 
-    E["Sort each row\nascending distance\n→ ranked gallery list per query"] --> F
+    E["Sort each row\nascending distance\n → ranked gallery list per query"] --> F
 
-    F["Filter junk matches\nsame vehicle + same camera → ignored"] --> G
+    F["Filter junk matches\n same vehicle + same camera → ignored\n cumulative valid positions recomputed"] --> G
 
-    G["Rank-1\ntop-1 correct / 1103 queries"] --> I
+    G["Rank-1\n top-1 correct / 88 queries"] --> I
     F --> H
-    H["mAP\nAverage Precision per query\nthen mean over 1103"] --> I
+    H["mAP\n Average Precision per query\n precision computed over valid positions only\n then mean over 88 queries"] --> I
 
-    I(["return dict\nrank1 · mAP"])
+    I(["return dict\n rank1 · mAP"])
 
     style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
     style B fill:#E6F1FB,stroke:#378ADD,color:#0C447C
@@ -73,12 +108,12 @@ identical to training — a mismatch would shift all embeddings and corrupt the 
 ## Step 2 — Distance matrix
 
 All embeddings are L2-normalized (`‖f(x)‖ = 1`) — cosine distance equals euclidean distance.
-The full `1103 × 31238` distance matrix is computed in one matrix multiplication:
+The full distance matrix is computed in one matrix multiplication:
 
-$$D = 1 - \mathbf{Q} \cdot \mathbf{G}^T \quad \in \mathbb{R}^{1103 \times 31238}$$
+$$D = 1 - \mathbf{Q} \cdot \mathbf{G}^T \quad \in \mathbb{R}^{88 \times 10500}$$
 
-where $\mathbf{Q} \in \mathbb{R}^{1103 \times 128}$ are query embeddings and
-$\mathbf{G} \in \mathbb{R}^{31238 \times 128}$ are gallery embeddings.
+where $\mathbf{Q} \in \mathbb{R}^{88 \times 128}$ are query embeddings and
+$\mathbf{G} \in \mathbb{R}^{10500 \times 128}$ are gallery embeddings.
 
 $D_{ij}$ = distance between query $i$ and gallery image $j$.
 Lower = more similar. Sorting each row ascending gives the ranked gallery list.
@@ -90,43 +125,51 @@ Lower = more similar. Sorting each row ascending gives the ranked gallery list.
 For each query, check if the top-1 retrieved image shows the same vehicle
 on a **different camera** (junk matches are skipped):
 
-$$\text{Rank-1} = \frac{1}{1103} \sum_{i=1}^{1103} \mathbf{1}[\text{top-1}(i) \text{ is correct}]$$
+$$\text{Rank-1} = \frac{1}{88} \sum_{i=1}^{88} \mathbf{1}[\text{top-1 valid}(i) \text{ is correct}]$$
 
 Simple and interpretable — but only evaluates the first position.
-Two models with identical Rank-1 can behave very differently at ranks 2-50.
+Two models with identical Rank-1 can behave very differently at deeper ranks.
 
 ---
 
 ## Step 4 — mAP
 
-For each query $i$, compute the Average Precision (AP) — the area under the
-precision-recall curve across all retrieved gallery images:
+For each query $i$, compute the Average Precision (AP) over **valid positions only**
+(same-camera matches excluded from the ranked list):
 
-$$\text{AP}_i = \frac{1}{R_i} \sum_{k=1}^{K} P(k) \cdot \text{rel}(k)$$
+$$\text{AP}_i = \frac{1}{R_i} \sum_{k=1}^{K} P_{\text{valid}}(k) \cdot \text{rel}(k)$$
 
 - $R_i$ — total number of relevant gallery images for query $i$
-- $k$ — rank position
-- $P(k)$ — precision at rank $k$ = fraction of correct results in top-$k$
-- $\text{rel}(k)$ — 1 if the image at rank $k$ is correct, 0 otherwise
+- $k$ — rank position among valid (non-junk) results
+- $P_{\text{valid}}(k)$ — precision at valid rank $k$
+- $\text{rel}(k)$ — 1 if the image at valid rank $k$ is correct, 0 otherwise
 
-$$\text{mAP} = \frac{1}{1103} \sum_{i=1}^{1103} \text{AP}_i$$
+$$\text{mAP} = \frac{1}{88} \sum_{i=1}^{88} \text{AP}_i$$
 
-**Concrete example** — query véhicule #3, 4 correct images in gallery :
+**Correct AP computation — positions among valid items only:**
+
+The junk mask is removed before computing positions. `cumulative_valid` tracks
+the running count of non-junk items seen so far, so each true positive's position
+is its rank among valid results only — not its absolute position in the full gallery.
+
+This matters: if a junk match appears at rank 1 and the first true positive at rank 2,
+the correct AP counts it at valid position 1 (not 2). Counting absolute positions
+would unfairly penalize the model for matches it is explicitly told to ignore.
+
+**Concrete example** — query vehicle #3, 3 correct images in gallery, 1 junk at rank 1:
 
 ```
-rank 1 : ✓  →  P(1) = 1/1 = 1.00
-rank 2 : ✗
-rank 3 : ✓  →  P(3) = 2/3 = 0.67
-rank 4 : ✗
-rank 5 : ✓  →  P(5) = 3/5 = 0.60
-rank 9 : ✓  →  P(9) = 4/9 = 0.44
+rank 1 : ✗ junk (same camera) → ignored
+rank 2 : ✓ valid → valid pos 1 → P_valid(1) = 1/1 = 1.00
+rank 3 : ✗ wrong
+rank 4 : ✓ valid → valid pos 3 → P_valid(3) = 2/3 = 0.67
+rank 6 : ✓ valid → valid pos 5 → P_valid(5) = 3/5 = 0.60
 
-AP = (1.00 + 0.67 + 0.60 + 0.44) / 4 = 0.68
+AP = (1.00 + 0.67 + 0.60) / 3 = 0.76
 ```
 
-A model that returns all correct images at ranks 1-4 would get AP = 1.0.
-A model that returns them at ranks 1, 10, 20, 30 would get a much lower AP.
-mAP rewards models that rank all correct images near the top — not just the first one.
+Without the junk correction, the first true positive would be counted at
+absolute position 2 instead of valid position 1 — AP would be artificially lower.
 
 ---
 
@@ -142,10 +185,20 @@ The challenge leaderboard ranks submissions by mAP, not Rank-1.
 
 ---
 
-## Return value
+## Evaluation artefact — what we fixed
 
-`evaluate()` returns a dict with two floats — `rank1` and `mAP` — both in `[0, 1]`.
-`main.py` saves a checkpoint when `mAP` exceeds the previous best value seen during training.
+Early runs (run_001 to run_003) reported mAP = 87-100% from epoch 1, which was
+clearly impossible for an untrained model. Two bugs were identified and corrected:
+
+**1. Missing vehicleID in official splits** — `query_label.xml` and `test_label.xml`
+do not carry `vehicleID`. The parser defaulted to `-1` for all images, making
+every gallery image appear as a match for every query. The fix was to use the
+local validation split from `train_label.xml` where vehicleIDs are real.
+
+**2. AP computed over absolute positions** — the original code computed precision
+at absolute gallery positions rather than valid-only positions. Junk matches at the
+top of the ranking inflated the denominator and produced artificially high AP.
+The fix uses `cumulative_valid` to reindex positions among non-junk items only.
 
 ---
 
@@ -154,3 +207,4 @@ The challenge leaderboard ranks submissions by mAP, not Rank-1.
 | Source | Link |
 |---|---|
 | AI City Challenge 2021 — evaluation protocol | https://www.aicitychallenge.org/2021-evaluation-system/ |
+| 2021 winners — local validation protocol | https://github.com/michuanhaohao/AICITY2021_Track2_DMT |

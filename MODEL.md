@@ -26,7 +26,7 @@ flowchart LR
     D["Positional embedding\n vit.py\n B × 197 × 192"] --> E
     E["Transformer x6\n transformer.py\n B × 197 × 192"] --> F
     F["Extract CLS token\n vit.py\n B × 192"] --> G
-    G["Projection head\n Linear + L2 normalize\n B × 128"]
+    G["Projection head\n Linear → BN → GELU → Linear + L2 normalize\n B × 128"]
  
     ATT["MultiHeadSelfAttention\n attention.py\n B × 8 × 197 × 197"] --> E
     BLK["Encoder Block\n block.py\n LayerNorm · Attention · skip\n LayerNorm · FFN · skip"] --> E
@@ -515,19 +515,29 @@ $$\mathbf{X}' = \text{LayerNorm}(\mathbf{X} + \text{SubModule}(\mathbf{X})) \qua
 ## Projection Head — `model/vit.py`
 
 After the Transformer, the CLS token at position 0 is extracted `(B, 192)`.
-It passes through a final LayerNorm, a linear projection, and L2 normalization:
+It passes through a final LayerNorm, a two-layer projection head, and L2 normalization:
 
 ```
-CLS token  :  (B, 192)
-LayerNorm  :  (B, 192)   ← stabilizes input to projection
-Linear     :  (B, 128)   ← 192 → 128, learned projection
-L2 norm    :  (B, 128)   ← projects onto unit hypersphere
+CLS token   :  (B, 192)
+LayerNorm   :  (B, 192)   ← stabilizes input to projection
+Linear      :  (B, 192)   ← 192 → 192, first projection
+BatchNorm   :  (B, 192)   ← prevents representation collapse
+GELU        :  (B, 192)   ← non-linearity
+Linear      :  (B, 128)   ← 192 → 128, final projection
+L2 norm     :  (B, 128)   ← projects onto unit hypersphere
 ```
+
+**Why a two-layer head with BatchNorm ?**
+A single linear projection is prone to representation collapse — all embeddings
+converge to the same point on the hypersphere. The BatchNorm layer forces the
+activations to maintain non-zero variance before the final projection, preventing
+this degenerate solution. This was the critical fix that enabled stable training
+from scratch without pretrained weights.
 
 **Why 128 dimensions ?**
 Compact enough for fast nearest-neighbor retrieval at inference — the distance matrix
-`1103 × 31238` is computed in one matrix multiplication. Expressive enough to
-separate 440 vehicle identities.
+`40 × 52677` (local eval) is computed in one matrix multiplication. Expressive
+enough to separate 440 vehicle identities on the unit hypersphere.
 
 **Why L2 normalization ?**
 After normalization all vectors lie on the unit hypersphere: $\|f(x)\| = 1$.
