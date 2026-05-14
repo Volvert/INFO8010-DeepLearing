@@ -61,7 +61,7 @@ training:
 # Monitoring
 # -----------------------------------------------------------------------------
 monitoring:
-  run_name: run_007
+  run_name: run_008
   runs_dir: runs
   eval_every: 10
   grad_every: 1

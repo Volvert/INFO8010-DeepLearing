@@ -49,17 +49,17 @@ class Transformer(nn.Module):
         mlp_ratio: float = 4.0,
         dropout: float = 0.1,
     ):
-    super().__init__()
+        super().__init__()
 
-    self.blocks = nn.ModuleList([
-        EncoderBlock(
-            d_model = d_model,
-            num_heads = num_heads,
-            mlp_ratio = mlp_ratio,
-            dropout = dropout,
-        )
-        for _ in range(depth)
-    ])
+        self.blocks = nn.ModuleList([
+            EncoderBlock(
+                d_model = d_model,
+                num_heads = num_heads,
+                mlp_ratio = mlp_ratio,
+                dropout = dropout,
+            )
+            for _ in range(depth)
+        ])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         

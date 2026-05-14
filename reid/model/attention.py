@@ -12,7 +12,7 @@ receptive field from the very first layer, unlike convolutions which are local.
 
 The full operation:
 
-  Q = X W_Q,  K = X W_K,  V = X W_V (linear projections)
+  Q = X W_Q, K = X W_K,  V = X W_V (linear projections)
 
   H_i = softmax( Q_i K_i^T / sqrt(d_k) ) V_i (scaled dot-product, per head)
 
@@ -61,50 +61,60 @@ class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int = 192, num_heads: int = 8, dropout: float = 0.1):
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-        self.d_model = d_model
+
+        self.d_model   = d_model
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads  # 192 // 8 = 24
-        self.scale = self.d_k ** -0.5      # 1 / sqrt(24) — stored, not recomputed
+        self.d_k       = d_model // num_heads  # 192 // 8 = 24
+        self.scale     = self.d_k ** -0.5      # 1 / sqrt(24) — stored, not recomputed
 
         self.qkv_proj = nn.Linear(d_model, 3 * d_model)  # fused W_Q, W_K, W_V
-        self.out_proj = nn.Linear(d_model, d_model)       # W_O
+        self.out_proj  = nn.Linear(d_model, d_model)      # W_O
         self.attn_drop = nn.Dropout(dropout)
 
-   """
-    Full attention pass from input token sequence to updated token sequence.
-    Called automatically when you do attention(x).
-    Every token queries all others, collects weighted value vectors,
-    and returns an enriched sequence of the same shape.
-
-    Step-by-step:
-      1. qkv_proj : (batch_size, 197, 192) -> (batch_size, 197, 576) fused Q K V projection
-      2. reshape : (batch_size, 197, 576) -> (batch_size, 197, 8, 72) split into heads
-      3. permute : (batch_size, 197, 8, 72) -> (batch_size, 8, 197, 72) heads before sequence
-      4. chunk : 3 x (batch_size, 8, 197, 24) separate Q, K, V
-      5. scores : Q @ K^T / sqrt(24) -> (batch_size, 8, 197, 197) similarity matrix
-      6. softmax : (batch_size, 8, 197, 197) attention weights
-      7. dropout : stochastic regularization on weights
-      8. AV : weights @ V -> (batch_size, 8, 197, 24) weighted sum of values
-      9. concat : (batch_size, 197, 192) merge 8 heads
-     10. out_proj : W_O -> (batch_size, 197, 192) final projection
-    """
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Full attention pass from input token sequence to updated token sequence.
+        Called automatically when you do attention(x).
+        Every token queries all others, collects weighted value vectors,
+        and returns an enriched sequence of the same shape.
 
+        Step-by-step:
+          1. qkv_proj : (B, 197, 192) -> (B, 197, 576)  fused Q K V projection
+          2. reshape : (B, 197, 576) -> (B, 197, 8, 72) split into heads
+          3. permute : (B, 197, 8, 72) -> (B, 8, 197, 72) heads before sequence
+          4. chunk : 3 x (B, 8, 197, 24) separate Q, K, V
+          5. scores : Q @ K^T / sqrt(24) -> (B, 8, 197, 197) similarity matrix
+          6. softmax : (B, 8, 197, 197) attention weights
+          7. dropout : stochastic regularization on weights
+          8. AV : weights @ V -> (B, 8, 197, 24) weighted sum of values
+          9. concat : (B, 197, 192) merge 8 heads
+         10. out_proj : W_O -> (B, 197, 192) final projection
+
+        Args:
+            x : (batch_size, seq_len, d_model) — input token sequence
+
+        Returns:
+            (batch_size, seq_len, d_model) — updated token sequence
+        """
         batch_size, seq_len, _ = x.shape
 
-        qkv = self.qkv_proj(x) # (batch_size, seq_len, 3*d_model)
-        qkv = qkv.reshape(batch_size, seq_len, self.num_heads, 3 * self.d_k)  # (batch_size, seq_len, h, 3*d_k)
-        qkv = qkv.permute(0, 2, 1, 3) # (batch_size, h, seq_len, 3*d_k)
+        # step 1-3 — fused QKV projection + reshape + permute
+        qkv = self.qkv_proj(x)  # (B, seq_len, 3*d_model)
+        qkv = qkv.reshape(batch_size, seq_len, self.num_heads, 3 * self.d_k)  # (B, seq_len, h, 3*d_k)
+        qkv = qkv.permute(0, 2, 1, 3) # (B, h, seq_len, 3*d_k)
 
-        q, k, v = qkv.chunk(3, dim=-1) # 3 x (batch_size, h, seq_len, d_k)
+        # step 4 — split into Q, K, V
+        q, k, v = qkv.chunk(3, dim=-1)  # 3 x (B, h, seq_len, d_k)
 
-        attn_scores  = torch.matmul(q, k.transpose(-2, -1)) * self.scale # (batch_size, h, seq_len, seq_len)
-        attn_weights = F.softmax(attn_scores, dim=-1) # (batch_size, h, seq_len, seq_len)
+        # step 5-7 — scaled dot-product attention
+        attn_scores  = torch.matmul(q, k.transpose(-2, -1)) * self.scale  # (B, h, seq_len, seq_len)
+        attn_weights = F.softmax(attn_scores, dim=-1)# (B, h, seq_len, seq_len)
         attn_weights = self.attn_drop(attn_weights)
 
-        attn_output = torch.matmul(attn_weights, v) # (batch_size, h, seq_len, d_k)
-        attn_output = attn_output.permute(0, 2, 1, 3).contiguous() # (batch_size, seq_len, h, d_k)
-        attn_output = attn_output.view(batch_size, seq_len, self.d_model) # (batch_size, seq_len, d_model)
+        # step 8-9 — weighted sum + merge heads
+        attn_output = torch.matmul(attn_weights, v) # (B, h, seq_len, d_k)
+        attn_output = attn_output.permute(0, 2, 1, 3).contiguous() # (B, seq_len, h, d_k)
+        attn_output = attn_output.view(batch_size, seq_len, self.d_model) # (B, seq_len, d_model)
 
-        return self.out_proj(attn_output) # (batch_size, seq_len, d_model)
+        # step 10 — output projection
+        return self.out_proj(attn_output) # (B, seq_len, d_model)

@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/main.py", line 31, in <module>
+    from model.init_model import build_model
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/model/init_model.py", line 22, in <module>
+    from model.vit import VehicleViT
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/model/vit.py", line 34, in <module>
+    from model.transformer import Transformer
+  File "/home/fvolvert/INFO8010-DeepLearning-Nvidia-Project/reid/model/transformer.py", line 52
+    super().__init__()
+    ^
+IndentationError: expected an indented block after function definition on line 44
