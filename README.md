@@ -27,8 +27,8 @@ such that same vehicle $\rightarrow$ close vectors, different vehicles $\rightar
 ## Dataset — AIC21 Track 2 ReID
 
 The project uses the **AI City Challenge 2021 Track 2** benchmark for city-scale vehicle re-identification.
-The dataset contains **85 058 cropped vehicle images** across **440 unique identities**, captured by **46 non-overlapping cameras** in real traffic conditions.
-A subset of images is synthetically generated via [VehicleX](https://github.com/yorkeyao/VehicleX) (3D-rendered vehicles) and **optionnaly** merged into the training set to compensate for the limited real data.
+The dataset contains **85 058 cropped vehicle images** across **440 real identities** (+ 1362 synthetic via VehicleX), captured by **46 non-overlapping cameras** in real traffic conditions.
+A subset of images is synthetically generated via [VehicleX](https://github.com/yorkeyao/VehicleX) (3D-rendered vehicles) and **optionally** merged into the training set to compensate for the limited real data.
 
 ---
 
@@ -78,7 +78,7 @@ Same vehicle + same camera = ignored. This enforces cross-camera retrieval.
 
 ---
 
-#### Evaluation output format ![warning](https://img.shields.io/badge/Not_implemented_yet-red)
+#### Evaluation output format
 
 For each query image, the model produces one `.txt` file listing gallery image IDs ranked by **ascending embedding distance**:
 
@@ -91,8 +91,8 @@ For each query image, the model produces one `.txt` file listing gallery image I
 ...           ← top-50 matches
 ```
 
-The evaluation script reads these files and computes **Rank-1 accuracy** and **mAP** against the ground-truth labels. 
-
+The evaluation script reads these files and computes **Rank-1 accuracy** and **mAP** against the ground-truth labels.
+An example of the expected format is provided in `tools/dist_example/`.
 
 ---
 
@@ -100,8 +100,8 @@ The evaluation script reads these files and computes **Rank-1 accuracy** and **m
 
 ```mermaid
 flowchart TD
-    A["train_label.xml\n image_train/\n VehicleX (+ AIVehicle3D)"] -->|"_parse_xml()"| B["TrainDataset\n samples + labels"]
-    B -->|"PKSampler\n P=16 x K=4"| C["Batch 160\n 20 ids x 8 imgs"]
+    A["train_label.xml\n image_train/\n VehicleX + AIVehicle3D"] -->|"_parse_xml()"| B["TrainDataset\n samples + labels"]
+    B -->|"PKSampler\n P=20 x K=8"| C["Batch 160\n 20 ids x 8 imgs"]
     C -->|"Triplet Loss"| D["Trained ViT"]
  
     E["query_label.xml\n image_query/"] -->|"_parse_xml()"| F["QueryDataset"]
@@ -148,35 +148,6 @@ It reads the `.txt` files from a results directory and displays the query image 
 
 ---
 
-## Why a Transformer and not a CNN?
-
-The 2021 AI City Challenge winners relied on CNN-based architectures — 
-primarily ResNet-50 pretrained on ImageNet — combined with re-ranking 
-post-processing. Their strong results stemmed largely from the quality 
-of the pretrained backbone, not the architecture itself.
-
-We deliberately chose a Vision Transformer for two reasons:
-
-**Architectural motivation** — CNNs capture local features through 
-sliding filters: they are excellent at detecting edges, textures and 
-local patterns, but struggle to relate distant parts of an image without 
-many stacked layers. A transformer processes all 196 patches simultaneously 
-through self-attention — the front bumper can directly attend to the rear 
-lights in a single layer. For vehicle Re-ID, where identity signal are 
-spread across the whole image (shape, rims, spoilers, color distribution), 
-global context matters more than local texture.
-
-**Scientific motivation** — the challenge was won in 2021 when transformers 
-were only beginning to emerge in computer vision. We revisit it five years 
-later to ask: can a modern attention-based architecture match CNN baselines 
-from that era, even when trained entirely from scratch without pretrained 
-weights? This controlled comparison isolates the architectural contribution 
-from the data advantage of pretraining.
-
-The constraint of training from scratch is intentional — it shifts the 
-focus toward convergence mechanics, metric learning design, and 
-regularisation strategies rather than fine-tuning an already powerful backbone.
-
 ## Pipeline
 
 ### 1. Artificial data generation — `data/vehiclex/`
@@ -191,17 +162,9 @@ regularisation strategies rather than fine-tuning an already powerful backbone.
    - 2.5. **RandomErasing** `p=0.5, scale=(0.02, 0.2)` — occlusion simulation (poles, other vehicles); forces global representation
 
 ### 3. Normalization — `data/data_transforms.py`
-  - **ToTensor** — converts a raw PIL image into a PyTorch tensor. 
-  Pixels go from integers in [0, 255] to floats in [0, 1], 
-  and dimensions are reordered so channels come first — 
-  the format PyTorch expects.
+   - 3.1. **ToTensor** — PIL HWC uint8 → PyTorch CHW float32 [0, 1]
+   - 3.2. **Normalize** `μ=[0.485, 0.456, 0.406]  σ=[0.229, 0.224, 0.225]` — ImageNet stats; equal variance across channels stabilizes gradient descent
 
-- **Normalize** — recenters each color channel around zero 
-  using the mean and standard deviation of ImageNet. 
-  Without this, brighter channels dominate the gradients 
-  and training becomes unstable. After normalization, 
-  all channels contribute equally to learning.
-  
 ### 4. Batch construction — `data/batch.py` + `data/dataloader.py`
    - 4.1. **PK sampling** `P=20 identities × K=8 images = batch of 160` — PKSampler builds each batch with exactly P identities and K images each; guarantees positives and negatives are always present for the triplet loss
    - 4.2. **DataLoader** — delivers batches to the model; `pin_memory=True` accelerates CPU → GPU transfer; `num_workers=4` parallelizes image loading; `drop_last=True` ensures every batch has exactly P×K images
@@ -213,145 +176,42 @@ regularisation strategies rather than fine-tuning an already powerful backbone.
 ### 6. CLS token + positional embedding — `model/vit.py`
    - 6.1. **CLS token** `nn.Parameter(1×192)` — learnable vector prepended → sequence becomes **197 × 192**; aggregates image-level representation through attention
    - 6.2. **Learned positional embedding** `nn.Parameter(197×192)` — added element-wise; self-attention is permutation-invariant, position must be injected back
+   - 6.3. **GAP (alternative)** — mean over 196 patch tokens; simpler aggregation, no CLS needed
 
-### 7. Transformer Encoder ×6 — `model/block.py` + `model/attention.py`
+### 7. Transformer encoder ×6 — `model/block.py` + `model/attention.py`
 
-Each block applies four operations, each protected by a skip connection.
+Each block applies two sub-modules, each wrapped in a **skip connection (+)**:
 
-- 7.1 **LayerNorm** — before each operation, every token is independently 
-normalized to zero mean and unit variance. This stabilizes activations 
-without depending on other images in the batch.
+   - 7.1. **LayerNorm** — normalizes each token independently: `u' = γ⊙(u−μ)/σ + β`; μ, σ computed over 192 features of a single token (not the batch)
+   - 7.2. **Multi-head self-attention** `8 heads × 24-d` — `Attention(Q,K,V) = softmax(QKᵀ / √24) · V`; each head learns a different relation (shape, color, position…)
+   - 7.3. **Skip connection ⊕** — `X = X + Attention(LayerNorm(X))`; gradient highway, prevents vanishing
+   - 7.4. **LayerNorm** — second normalization before FFN
+   - 7.5. **FFN** — `Linear(192→768) → GELU → Dropout(0.1) → Linear(768→192)`; hidden dim = 4 × d_model; GELU smooth activation
+   - 7.6. **Skip connection ⊕** — `X = X + FFN(LayerNorm(X))`
 
-- 7.2 **Multi-Head Self-Attention** — each token looks at every other token 
-and decides which ones matter. Three projections are computed per token 
-(Query, Key, Value) and attention scores determine how much each token 
-borrows from the others. Running 8 heads in parallel lets the model 
-simultaneously track different relationships — shape, color, position.
-
-- 7.3 **Skip connection** — the input is added back to the output of each 
-sub-module. This creates a gradient highway through all 6 blocks, 
-preventing vanishing gradients during backpropagation.
-
-- 7.4 **FFN** — after attention mixes information across tokens, the FFN 
-processes each token independently through a 4× expansion 
-(192 → 768 → 192) with GELU activation, adding non-linear 
-transformation capacity.
-
-### 8. Projection Head — `model/vit.py`
-
-- **8.1. Extract CLS token** — after the Transformer, only position 0 
-  of the output sequence is kept. The CLS token has aggregated the full 
-  image representation through 6 layers of attention. 
-  The 196 patch tokens are discarded.
-
-- **8.2. Projection** `Linear(192→192) → BatchNorm → GELU → Linear(192→256)` 
-  — a two-layer head that compresses the representation into a 256-dimensional 
-  embedding. The BatchNorm layer is critical — it prevents representation 
-  collapse by forcing activations to maintain non-zero variance.
-
-- **8.3. L2 normalize** `‖f(x)‖ = 1` — every embedding vector is projected 
-  onto the unit hypersphere. This makes cosine similarity equivalent to 
-  euclidean distance, simplifying both the triplet loss and the 
-  nearest-neighbor search at evaluation time.
+### 8. Projection head — `model/vit.py`
+   - 8.1. **Extract CLS token** — take position 0 of the output sequence (1 × 192)
+   - 8.2. **Two-layer projection** `Linear(192→192) → BatchNorm → GELU → Linear(192→128)` — BatchNorm prevents representation collapse by maintaining non-zero activation variance
+   - 8.3. **L2 normalize** `‖f(x)‖ = 1` — projects onto unit hypersphere; cosine distance ≡ euclidean distance
 
 ### 9. Loss — `losses/tripletloss.py`
+   - 9.1. **Batch-hard mining** — for each anchor: hardest positive `max d(a,p)` + hardest negative `min d(a,n)` within the batch
+   - 9.2. **Triplet loss** `max(0, d(a,p) − d(a,n) + 0.15)` — margin=0.15 enforces a separation buffer; loss=0 → no gradient
+   - 9.3. **Uniformity loss** `log mean exp(-2‖zi−zj‖²)` — repulsive force preventing representation collapse; all embeddings pushed apart on the hypersphere
+   - 9.4. **Combined** `L = L_triplet + 0.05 × L_unif` — total loss can be negative when embeddings are well-spread (healthy sign)
 
-- **9.1. Batch-Hard Mining** — for each image in the batch (the *anchor*), 
-  the hardest triplet is selected:
-  - **hardest positive** `max d(a,p)` — the image of the *same* vehicle 
-    that is *farthest* from the anchor in embedding space. 
-    This is the most challenging same-identity pair to pull together.
-  - **hardest negative** `min d(a,n)` — the image of a *different* vehicle 
-    that is *closest* to the anchor. This is the most dangerous 
-    confusion the model could make.
-
-  Focusing on hard pairs forces the model to fix its worst mistakes 
-  at every step, rather than wasting gradient on easy pairs it 
-  already handles correctly.
-
-- **9.2. Triplet Loss** `max(0, d(a,p) − d(a,n) + margin)` — the loss 
-  is zero when the negative is already farther than the positive by 
-  at least `margin`. Only violated triplets produce a gradient.
-  
-  The **margin** acts as a safety buffer: the model is not just asked 
-  to rank positives before negatives — it must keep them separated 
-  by a minimum distance. A tighter margin is easier to satisfy; 
-  too large and the model collapses trying to enforce an impossible gap.
-
-- **9.3. Uniformity Loss** `log mean exp(-2‖zi − zj‖²)` — a regularization 
-  term that penalizes embeddings clustering together on the hypersphere. 
-  Without it, the model finds a degenerate solution: mapping everything 
-  to the same point satisfies the triplet loss trivially (all distances 
-  are zero, all margins are satisfied). The uniformity loss acts as a 
-  repulsive force pushing all embeddings apart, regardless of identity.
-
-- **9.4. Combined objective** `L = L_triplet + λ · L_unif` with `λ = 0.25` 
-  — the triplet loss pulls same-identity embeddings together and pushes 
-  different ones apart; the uniformity loss ensures the full hypersphere 
-  is used rather than collapsing into a small cluster.
-
-### 10. Optimisation — `engine/train.py` + `utils/schedular.py`
-
-- **10.1. AdamW** `lr=5e-4, β₁=0.9, β₂=0.999` — adaptive optimiser that 
-  maintains a separate learning rate for each model parameter. `β₁=0.9` 
-  means the gradient direction is smoothed over ~10 past steps; `β₂=0.999` 
-  means the gradient magnitude is tracked over ~1000 steps — this combination 
-  is the standard ViT default from the original paper. The **W** stands for 
-  decoupled weight decay, making it more effective than vanilla Adam for 
-  regularisation. `lr=5e-4` was chosen as the peak learning rate — higher 
-  values caused training instability, lower values slowed convergence 
-  without improving final performance.
-
-- **10.2. Linear Warmup** — the learning rate starts near zero and rises 
-  linearly to `5e-4` over the first 15 epochs. At the start of training, 
-  weights are random and gradients are chaotic — a large LR would cause 
-  destructive updates. 15 epochs was chosen because the model needs more 
-  warmup time at `lr=5e-4` than at the standard `1e-4` — the higher peak 
-  requires a longer stabilisation phase.
-
-- **10.3. Cosine Decay** — after warmup, the LR follows a cosine curve 
-  down to zero over the remaining epochs. Unlike step or linear decay, 
-  the cosine schedule decreases slowly at first and gently at the end — 
-  the model keeps exploring in mid-training, then converges smoothly 
-  without oscillations. This is the standard schedule for ViT training.
-
-- **10.4. Weight Decay** `λ=0.01` — penalises large weights by adding 
-  `λ‖θ‖²` to the loss. `0.01` is the standard AdamW default — strong 
-  enough to prevent overfitting on the 52k training images, mild enough 
-  not to over-constrain the model's capacity to learn vehicle features.
-
-- **10.5. Dropout** `p=0.1` — during training, 10% of neurons are randomly 
-  zeroed at each forward pass. `p=0.1` is deliberately light — heavier 
-  dropout would slow convergence on a model already training from scratch 
-  without pretrained weights. Disabled at evaluation.
+### 10. Optimization — `engine/train.py` + `utils/schedular.py`
+   - 10.1. **AdamW** `lr=5e-4, β₁=0.9, β₂=0.999` — adaptive per-parameter learning rate; W = weight decay decoupled from gradient
+   - 10.2. **Linear warmup** — lr: 0 → 5e-4 over 50 epochs; stabilizes early training when weights are random
+   - 10.3. **Cosine decay** — lr smoothly decreases to 0 over 2000 epochs; avoids sharp drops
+   - 10.4. **Weight decay** `λ=0.01` — penalty `λ‖θ‖²` discourages large weights, reduces overfitting
+   - 10.5. **Dropout** `p=0.1` — applied in FFN and on attention weights; stochastic regularization
 
 ### 11. Evaluation — `engine/evaluate.py` + `monitoring/logger.py`
-
-- **11.1. Extract embeddings** — the model switches to evaluation mode 
-  (`model.eval()`) which disables dropout for deterministic embeddings. 
-  `torch.no_grad()` disables gradient computation — unnecessary at 
-  inference, this halves memory usage. No augmentation is applied: 
-  stable and reproducible embeddings are required for reliable ranking.
-
-- **11.2. kNN search** — for each query, a cosine distance is computed 
-  against all 31,238 gallery images via 
-  `dist = 1 − query_emb @ gallery_emb.T`. Since embeddings are 
-  L2-normalized, cosine distance is equivalent to euclidean distance. 
-  The gallery is then sorted by ascending distance — 
-  the most similar images appear at the top.
-
-- **11.3. Rank-1** — measures whether the correct vehicle is retrieved 
-  at position 1. A query is considered correct if its top-1 result shows 
-  the same vehicle from a different camera. Simple and intuitive, but 
-  does not capture the quality of the full ranking.
-
-- **11.4. mAP** — measures the quality of the full ranking for each query. 
-  For each query, Average Precision computes precision at each retrieved 
-  true positive, then averages these values. mAP is the mean over all 
-  queries. A model that retrieves all true positives at the top of the 
-  list achieves mAP=1. This is the primary challenge metric — stricter 
-  than Rank-1 as it penalises true positives ranked too low. 
-  **Target: reach the 36.0% val mAP baseline of the 2021 winners.**
+   - 11.1. **Extract embeddings** `model.eval() + no_grad()` — forward pass on all query and gallery images, no augmentation
+   - 11.2. **kNN search** — cosine distance matrix: `dist = 1 − query_emb @ gallery_emb.T`; rank by ascending distance
+   - 11.3. **Rank-1** — fraction of queries where top-1 retrieved image shares the same identity
+   - 11.4. **mAP** — mean Average Precision; area under precision-recall curve averaged over all queries; **target > 36.0% val mAP**
 
 ## Architecture default
 
@@ -395,73 +255,75 @@ flowchart TD
     subgraph DA["① Data Augmentation — data/data_transforms.py"]
         A1["RandomResizedCrop\nscale 0.6–1.0"]:::aug
         A2["HorizontalFlip p=0.5"]:::aug
-        A3["ColorJitter\n bright · contrast · sat · hue 0.05"]:::aug
+        A3["ColorJitter\nbright · contrast · sat · hue 0.05"]:::aug
         A4["GaussianBlur σ 0.1–0.5"]:::aug
-        A5["RandomErasing p=0.5\n scale 0.02–0.2"]:::aug
+        A5["RandomErasing p=0.5\nscale 0.02–0.2"]:::aug
         A1-->A2-->A3-->A4-->A5
     end
 
     subgraph NO["② Normalization — data/data_transforms.py"]
-        B1["ToTensor\n PIL HWC uint8 → CHW float32"]:::norm
-        B2["Normalize\n μ=[.485,.456,.406]  σ=[.229,.224,.225]"]:::norm
+        B1["ToTensor\nPIL HWC uint8 → CHW float32"]:::norm
+        B2["Normalize\nμ=[.485,.456,.406]  σ=[.229,.224,.225]"]:::norm
         B1-->B2
     end
 
     subgraph BA["③ Batch Construction — data/batch.py + data/dataloader.py"]
-        BA1["PKSampler\n P=20 identities × K=8 images = 160"]:::batch
-        BA2["DataLoader\n pin_memory=True · num_workers=4 · drop_last=True"]:::batch
+        BA1["PKSampler\nP=20 identities × K=8 images = 160"]:::batch
+        BA2["DataLoader\npin_memory=True · num_workers=4 · drop_last=True"]:::batch
         BA1-->BA2
     end
 
     subgraph PE["④ Patch Embedding — model/patch_embedded.py"]
-        C1["Conv2d k=16 s=16\n 3×224×224 → 196 × 192"]:::model
-        C2["Flatten + Transpose\n 196 × 192 tokens"]:::model
+        C1["Conv2d k=16 s=16\n3×224×224 → 196 × 192"]:::model
+        C2["Flatten + Transpose\n196 × 192 tokens"]:::model
         C1-->C2
     end
 
     subgraph CLS["⑤ CLS + Positional Embedding — model/vit.py"]
         D1["CLS token\nnn.Parameter 1×192"]:::model
         D2["Prepend → 197 tokens"]:::model
-        D3["+ Pos. Embedding\n nn.Parameter 197×192 learned"]:::model
-        D4["GAP — mean over 196 tokens\n alternative to CLS"]:::model
+        D3["+ Pos. Embedding\nnn.Parameter 197×192 learned"]:::model
+        D4["GAP — mean over 196 tokens\nalternative to CLS"]:::model
         D1-->D2-->D3-->D4
     end
 
     subgraph TR["⑥ Transformer ×6 — model/block.py + model/attention.py"]
-        E1["LayerNorm\n μ σ per token"]:::eval
-        E2["Multi-Head Attention\n 8 heads × 24-d  softmax·QKᵀ/√24·V"]:::attn
-        E3["⊕ skip connection\n X = X + Attention·LayerNorm·X"]:::skip
-        E4["LayerNorm\n μ σ per token"]:::eval
-        E5["FFN\n Linear 192→768 · GELU · Dropout 0.1 · Linear 768→192"]:::ffn
-        E6["⊕ skip connection\n X = X + FFN·LayerNorm·X"]:::skip
+        E1["LayerNorm\nμ σ per token"]:::eval
+        E2["Multi-Head Attention\n8 heads × 24-d  softmax·QKᵀ/√24·V"]:::attn
+        E3["⊕ skip connection\nX = X + Attention·LayerNorm·X"]:::skip
+        E4["LayerNorm\nμ σ per token"]:::eval
+        E5["FFN\nLinear 192→768 · GELU · Dropout 0.1 · Linear 768→192"]:::ffn
+        E6["⊕ skip connection\nX = X + FFN·LayerNorm·X"]:::skip
         E1-->E2-->E3-->E4-->E5-->E6
     end
 
     subgraph PH["⑦ Projection Head — model/vit.py"]
-        F1["Extract CLS token\n position 0 · 1×192"]:::head
-        F2["Linear 192→128"]:::head
-        F3["L2 Normalize  ‖f·x‖=1\n unit hypersphere"]:::head
+        F1["Extract CLS token\nposition 0 · 1×192"]:::head
+        F2["Linear 192→192 · BN · GELU · Linear 192→128"]:::head
+        F3["L2 Normalize  ‖f·x‖=1\nunit hypersphere"]:::head
         F4["Embedding ℝ¹²⁸"]:::head
         F1-->F2-->F3-->F4
     end
 
     subgraph LO["⑧ Loss — losses/triplet.py"]
-        G1["Batch-hard Mining\n hardest pos max·d·a,p + hardest neg min·d·a,n"]:::loss
-        G2["Triplet Loss\n max·0, d·a,p − d·a,n + 0.3"]:::loss
+        G1["Batch-hard Mining\nhardest pos max·d·a,p + hardest neg min·d·a,n"]:::loss
+        G2["Triplet Loss\nmax·0, d·a,p − d·a,n + 0.15"]:::loss
+        G3["Uniformity Loss\nlog mean exp -2·d² · λ=0.05"]:::loss
+        G2-->G3
         G1-->G2
     end
 
     subgraph OP["⑨ Optimization — engine/train.py + utils/scheduler.py"]
-        H1["AdamW\nlr=1e-4  β₁=0.9  β₂=0.999"]:::optim
-        H2["Linear Warmup\n 0 → lr over 5 epochs"]:::optim
-        H3["Cosine Decay\n lr → 0 smoothly"]:::optim
-        H4["Weight decay λ=0.01\n Dropout p=0.1"]:::optim
+        H1["AdamW\nlr=5e-4  β₁=0.9  β₂=0.999"]:::optim
+        H2["Linear Warmup\n0 → lr over 50 epochs"]:::optim
+        H3["Cosine Decay\nlr → 0 over 2000 epochs"]:::optim
+        H4["Weight decay λ=0.01\nDropout p=0.1"]:::optim
         H1-->H2-->H3-->H4
     end
 
     subgraph EV["⑩ Evaluation — engine/evaluate.py + monitoring/logger.py"]
-        I1["Extract embeddings\n model.eval + no_grad"]:::eval
-        I2["kNN cosine distance\n dist = 1 − query @ gallery.T"]:::eval
+        I1["Extract embeddings\nmodel.eval + no_grad"]:::eval
+        I2["kNN cosine distance\ndist = 1 − query @ gallery.T"]:::eval
         I3["Rank-1"]:::eval
         I4["mAP  target > 36%"]:::eval
         I1-->I2-->I3-->I4
@@ -498,6 +360,8 @@ flowchart TD
 ## Target
 
 Beat the **36.0% val mAP** cross-entropy baseline of the 2021 challenge winners.
+
+> **Current best : run_007 — mAP ~80% · Rank-1 ~85%** on local validation split (88 held-out identities, 2000 epochs from scratch)
 
 ---
 
