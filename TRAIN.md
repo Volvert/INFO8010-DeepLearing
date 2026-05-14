@@ -3,7 +3,7 @@
 ## Overview
 
 `train.py` implements one training epoch. `main.py` calls `train_one_epoch()`
-in a loop over 50 epochs and handles checkpointing, evaluation and logging.
+in a loop over 2000 epochs and handles checkpointing, evaluation and logging.
 
 ---
 
@@ -16,9 +16,9 @@ flowchart LR
 
     SCH["utils/scheduler.py\nSequentialLR"] -->|"scheduler.step()"| B
     OPT["AdamW\noptimizer"] -->|"optimizer.step()"| B
-    DL["data/dataloader.py\nPKSampler batch iterator"] -->|"64 images · 64 labels"| B
+    DL["data/dataloader.py\nPKSampler batch iterator"] -->|"160 images · 160 labels"| B
     VIT["model/vit.py\nVehicleViT"] -->|"forward pass"| B
-    LOSS["losses/triplet.py\nBatchHardTripletLoss"] -->|"loss · active fraction"| B
+    LOSS["losses/tripletloss.py\nBatchHardTripletLoss + Uniformity"] -->|"loss · active fraction"| B
 
     style A fill:#E1F5EE,stroke:#1D9E75,color:#085041
     style B fill:#FFF4E5,stroke:#E8A020,color:#7A4500
@@ -37,13 +37,13 @@ flowchart LR
 flowchart TD
     START(["epoch start\nmodel.train()"]) --> LOOP
 
-    LOOP["for images, vehicle_ids in dataloader\n27 batches · 64 images each"] --> ZG
+    LOOP["for images, vehicle_ids in dataloader\n20 batches · 160 images each"] --> ZG
 
     ZG["optimizer.zero_grad()\nclears gradients from previous batch"] --> FW
 
-    FW["forward pass\nmodel images\n64 × 3 × 224 × 224  →  64 × 128"] --> TL
+    FW["forward pass\nmodel images\n160 × 3 × 224 × 224  →  160 × 128"] --> TL
 
-    TL["BatchHardTripletLoss\nembeddings · vehicle_ids\nmax 0 · d a p - d a n + 0.3"] --> BW
+    TL["BatchHardTripletLoss + Uniformity\nembeddings · vehicle_ids\nmax 0 · d a p - d a n + 0.15\n+ λ · L_unif"] --> BW
 
     BW["loss.backward()\ncomputes ∂loss/∂θ\nfor every ViT parameter"] --> OS
 
@@ -54,7 +54,7 @@ flowchart TD
     CHK{"more batches ?"} -->|"yes"| LOOP
     CHK -->|"no"| SCH
 
-    SCH["scheduler.step()\nwarmup + cosine decay\nonce per epoch"] --> RET
+    SCH["scheduler.step()\nwarmup 50 epochs + cosine decay\nonce per epoch"] --> RET
 
     RET(["return dict\nloss · active_triplets · lr"])
 
@@ -86,18 +86,22 @@ Called **before** the forward pass, once per batch.
 
 ### Forward pass
 ```
-(64, 3, 224, 224)  →  patch_embed  →  (64, 196, 192)
-                   →  CLS + pos_embed + dropout
-                   →  Transformer × 6
-                   →  CLS + norm + proj_head + L2
-                   →  (64, 128)   L2-normalized embeddings
+(160, 3, 224, 224)  →  patch_embed  →  (160, 196, 192)
+                    →  CLS + pos_embed + dropout
+                    →  Transformer × 6
+                    →  CLS + norm + proj_head + L2
+                    →  (160, 128)   L2-normalized embeddings
 ```
 
 ### `BatchHardTripletLoss`
-Receives `embeddings (64, 128)` and `vehicle_ids (64,)`.
+Receives `embeddings (160, 128)` and `vehicle_ids (160,)`.
 Mines hardest positive and hardest negative per anchor within the batch.
-Returns `loss` (scalar) and `active` (fraction of non-zero triplets).
+Returns `loss` (scalar, can be negative due to uniformity term) and
+`active` (fraction of non-zero triplets).
 `loss.backward()` propagates gradients through the full ViT graph.
+
+Combined loss:
+$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{triplet}} + \lambda_{\text{unif}} \cdot \mathcal{L}_{\text{unif}}, \quad \lambda = 0.05$$
 
 ### `optimizer.step()`
 AdamW reads the gradients and updates all ViT weights:
@@ -106,7 +110,8 @@ Uses the lr currently set by the scheduler.
 
 ### `scheduler.step()`
 Called **once per epoch**, after all batches — not inside the batch loop.
-27 batches per epoch — calling inside the loop would decay the lr 27× too fast.
+20 batches per epoch — calling inside the loop would decay the lr 20× too fast.
+Linear warmup over 50 epochs, then cosine decay to epoch 2000.
 
 ---
 
@@ -114,9 +119,9 @@ Called **once per epoch**, after all batches — not inside the batch loop.
 
 | Module | Role |
 |---|---|
-| `data/dataloader.py` | PKSampler batch iterator — 27 batches × 64 images |
+| `data/dataloader.py` | PKSampler batch iterator — 20 batches × 160 images |
 | `model/vit.py` | Forward pass — images to L2-normalized embeddings |
-| `losses/triplet.py` | Batch-hard triplet loss — loss + active fraction |
+| `losses/tripletloss.py` | Batch-hard triplet loss + uniformity — loss + active fraction |
 | `utils/scheduler.py` | Built in `main.py`, stepped once per epoch |
-| `engine/evaluate.py` | Called by `main.py` every N epochs |
+| `engine/evaluate.py` | Called by `main.py` every 10 epochs |
 | `monitoring/` | Logger, triplet health, gradient health |
