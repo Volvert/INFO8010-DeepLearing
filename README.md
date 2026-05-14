@@ -153,65 +153,189 @@ It reads the `.txt` files from a results directory and displays the query image 
 ### 1. Artificial data generation — `data/vehiclex/`
    - 1.1. **VehicleX synthetic images** — 3D-rendered cropped vehicles with controlled viewpoints, lighting and backgrounds added to the training set
    - 1.2. **Label alignment** — synthetic images are assigned real vehicle identities and camera IDs compatible with `train_label.xml`
-
 ### 2. Data augmentation — `data/data_transforms.py`
    - 2.1. **RandomResizedCrop** `scale=(0.6, 1.0)` — simulates imperfect detection crops
    - 2.2. **HorizontalFlip** `p=0.5` — lateral symmetry of vehicles; no vertical flip (invalid viewpoint)
    - 2.3. **ColorJitter** `brightness · contrast · saturation` — cross-camera lighting variance; hue kept minimal to preserve vehicle color identity
    - 2.4. **GaussianBlur** `σ ∈ [0.1, 0.5]` — low-quality or motion-blurred cameras
    - 2.5. **RandomErasing** `p=0.5, scale=(0.02, 0.2)` — occlusion simulation (poles, other vehicles); forces global representation
-
 ### 3. Normalization — `data/data_transforms.py`
-   - 3.1. **ToTensor** — PIL HWC uint8 → PyTorch CHW float32 [0, 1]
-   - 3.2. **Normalize** `μ=[0.485, 0.456, 0.406]  σ=[0.229, 0.224, 0.225]` — ImageNet stats; equal variance across channels stabilizes gradient descent
-
+ 
+- **ToTensor** — converts a raw PIL image into a PyTorch tensor.
+  Pixels go from integers in [0, 255] to floats in [0, 1],
+  and dimensions are reordered so channels come first —
+  the format PyTorch expects.
+- **Normalize** — recenters each color channel around zero
+  using the mean and standard deviation of ImageNet.
+  Without this, brighter channels dominate the gradients
+  and training becomes unstable. After normalization,
+  all channels contribute equally to learning.
 ### 4. Batch construction — `data/batch.py` + `data/dataloader.py`
-   - 4.1. **PK sampling** `P=20 identities × K=8 images = batch of 160` — PKSampler builds each batch with exactly P identities and K images each; guarantees positives and negatives are always present for the triplet loss
-   - 4.2. **DataLoader** — delivers batches to the model; `pin_memory=True` accelerates CPU → GPU transfer; `num_workers=4` parallelizes image loading; `drop_last=True` ensures every batch has exactly P×K images
-
+ 
+- **4.1. PK sampling** `P=20 identities × K=8 images = batch of 160` — PKSampler builds each batch with exactly P identities and K images each. Standard random shuffle cannot guarantee positives in a batch — batch-hard triplet loss requires at least one positive per anchor. With P=20 and K=8, each anchor has **7 positives** and **152 negatives** available for hard mining.
+- **4.2. DataLoader** — delivers batches to the model; `pin_memory=True` accelerates CPU → GPU transfer; `num_workers=4` parallelizes image loading so the GPU never waits for data; `drop_last=True` ensures every batch has exactly P×K images — an incomplete last batch would break the triplet loss structure.
 ### 5. Patch embedding — `model/patch_embedded.py`
-   - 5.1. **Conv2d** `kernel=16, stride=16, out=192` — splits 3×224×224 into 196 patches, projects each to 192-d in one operation
-   - 5.2. **Flatten + Transpose** — reshapes 192×14×14 → sequence of **196 × 192** tokens
-
+ 
+- **5.1. Conv2d** `kernel=16, stride=16, out=192` — splits 3×224×224 into 196 non-overlapping patches of 16×16 pixels, and linearly projects each 768-value patch to a 192-d vector in one GPU operation. The stride=16 guarantees no overlap and no gap between patches.
+- **5.2. Flatten + Transpose** — reshapes 192×14×14 → sequence of **196 × 192** tokens. The spatial grid becomes a flat sequence — the format the Transformer expects.
 ### 6. CLS token + positional embedding — `model/vit.py`
-   - 6.1. **CLS token** `nn.Parameter(1×192)` — learnable vector prepended → sequence becomes **197 × 192**; aggregates image-level representation through attention
-   - 6.2. **Learned positional embedding** `nn.Parameter(197×192)` — added element-wise; self-attention is permutation-invariant, position must be injected back
-   - 6.3. **GAP (alternative)** — mean over 196 patch tokens; simpler aggregation, no CLS needed
+ 
+- **6.1. CLS token** `nn.Parameter(1×192)` — a learnable vector with no spatial meaning, prepended to the 196 patch tokens → sequence becomes **197 × 192**. It aggregates the full image representation through attention across all 6 Transformer layers. Only this token is extracted after the Transformer.
+- **6.2. Learned positional embedding** `nn.Parameter(197×192)` — added element-wise to the full sequence. Self-attention is permutation-invariant — without this, the Transformer cannot distinguish the top-left patch from the bottom-right patch. One position vector per token, learned during training.
 
-### 7. Transformer encoder ×6 — `model/block.py` + `model/attention.py`
+### 7. Transformer Encoder ×6 — `model/block.py` + `model/attention.py`
+ 
+Each block applies two operations, each protected by a skip connection.
+ 
+**LayerNorm** — before each operation, every token is independently
+normalized to zero mean and unit variance. This stabilizes activations
+without depending on other images in the batch.
+ 
+**Multi-Head Self-Attention** — each token looks at every other token
+and decides which ones matter. Three projections are computed per token
+(Query, Key, Value) and attention scores determine how much each token
+borrows from the others. Running 8 heads in parallel lets the model
+simultaneously track different relationships — shape, color, position.
+ 
+**Skip connection** — the input is added back to the output of each
+sub-module. This creates a gradient highway through all 6 blocks,
+preventing vanishing gradients during backpropagation.
+ 
+**FFN** — after attention mixes information across tokens, the FFN
+processes each token independently through a 4× expansion
+(192 → 768 → 192) with GELU activation, adding non-linear
+transformation capacity.
 
-Each block applies two sub-modules, each wrapped in a **skip connection (+)**:
-
-   - 7.1. **LayerNorm** — normalizes each token independently: `u' = γ⊙(u−μ)/σ + β`; μ, σ computed over 192 features of a single token (not the batch)
-   - 7.2. **Multi-head self-attention** `8 heads × 24-d` — `Attention(Q,K,V) = softmax(QKᵀ / √24) · V`; each head learns a different relation (shape, color, position…)
-   - 7.3. **Skip connection ⊕** — `X = X + Attention(LayerNorm(X))`; gradient highway, prevents vanishing
-   - 7.4. **LayerNorm** — second normalization before FFN
-   - 7.5. **FFN** — `Linear(192→768) → GELU → Dropout(0.1) → Linear(768→192)`; hidden dim = 4 × d_model; GELU smooth activation
-   - 7.6. **Skip connection ⊕** — `X = X + FFN(LayerNorm(X))`
-
-### 8. Projection head — `model/vit.py`
-   - 8.1. **Extract CLS token** — take position 0 of the output sequence (1 × 192)
-   - 8.2. **Two-layer projection** `Linear(192→192) → BatchNorm → GELU → Linear(192→128)` — BatchNorm prevents representation collapse by maintaining non-zero activation variance
-   - 8.3. **L2 normalize** `‖f(x)‖ = 1` — projects onto unit hypersphere; cosine distance ≡ euclidean distance
+### 8. Projection Head — `model/vit.py`
+ 
+- **8.1. Extract CLS token** — after the Transformer, only position 0
+  of the output sequence is kept. The CLS token has aggregated the full
+  image representation through 6 layers of attention.
+  The 196 patch tokens are discarded.
+- **8.2. Projection** `Linear(192→192) → BatchNorm → GELU → Linear(192→128)`
+  — a two-layer head that compresses the representation into a 128-dimensional
+  embedding. The BatchNorm layer is critical — it prevents representation
+  collapse by forcing activations to maintain non-zero variance.
+- **8.3. L2 normalize** `‖f(x)‖ = 1` — every embedding vector is projected
+  onto the unit hypersphere. This makes cosine similarity equivalent to
+  euclidean distance, simplifying both the triplet loss and the
+  nearest-neighbor search at evaluation time.
 
 ### 9. Loss — `losses/tripletloss.py`
-   - 9.1. **Batch-hard mining** — for each anchor: hardest positive `max d(a,p)` + hardest negative `min d(a,n)` within the batch
-   - 9.2. **Triplet loss** `max(0, d(a,p) − d(a,n) + 0.15)` — margin=0.15 enforces a separation buffer; loss=0 → no gradient
-   - 9.3. **Uniformity loss** `log mean exp(-2‖zi−zj‖²)` — repulsive force preventing representation collapse; all embeddings pushed apart on the hypersphere
-   - 9.4. **Combined** `L = L_triplet + 0.05 × L_unif` — total loss can be negative when embeddings are well-spread (healthy sign)
-
-### 10. Optimization — `engine/train.py` + `utils/schedular.py`
-   - 10.1. **AdamW** `lr=5e-4, β₁=0.9, β₂=0.999` — adaptive per-parameter learning rate; W = weight decay decoupled from gradient
-   - 10.2. **Linear warmup** — lr: 0 → 5e-4 over 50 epochs; stabilizes early training when weights are random
-   - 10.3. **Cosine decay** — lr smoothly decreases to 0 over 2000 epochs; avoids sharp drops
-   - 10.4. **Weight decay** `λ=0.01` — penalty `λ‖θ‖²` discourages large weights, reduces overfitting
-   - 10.5. **Dropout** `p=0.1` — applied in FFN and on attention weights; stochastic regularization
-
+ 
+- **9.1. Batch-Hard Mining** — for each image in the batch (the *anchor*),
+  the hardest triplet is selected:
+  - **hardest positive** `max d(a,p)` — the image of the *same* vehicle
+    that is *farthest* from the anchor in embedding space.
+    This is the most challenging same-identity pair to pull together.
+  - **hardest negative** `min d(a,n)` — the image of a *different* vehicle
+    that is *closest* to the anchor. This is the most dangerous
+    confusion the model could make.
+  Focusing on hard pairs forces the model to fix its worst mistakes
+  at every step, rather than wasting gradient on easy pairs it
+  already handles correctly.
+- **9.2. Triplet Loss** `max(0, d(a,p) − d(a,n) + margin)` — the loss
+  is zero when the negative is already farther than the positive by
+  at least `margin=0.15`. Only violated triplets produce a gradient.
+  The **margin** acts as a safety buffer: the model is not just asked
+  to rank positives before negatives — it must keep them separated
+  by a minimum distance. A tighter margin is easier to satisfy;
+  too large and the model collapses trying to enforce an impossible gap.
+- **9.3. Uniformity Loss** `log mean exp(-2‖zi − zj‖²)` — a regularization
+  term that penalizes embeddings clustering together on the hypersphere.
+  Without it, the model finds a degenerate solution: mapping everything
+  to the same point satisfies the triplet loss trivially (all distances
+  are zero, all margins are satisfied). The uniformity loss acts as a
+  repulsive force pushing all embeddings apart, regardless of identity.
+- **9.4. Combined objective** `L = L_triplet + λ · L_unif` with `λ = 0.05`
+  — the triplet loss pulls same-identity embeddings together and pushes
+  different ones apart; the uniformity loss ensures the full hypersphere
+  is used rather than collapsing into a small cluster.
+### 10. Optimisation — `engine/train.py` + `utils/schedular.py`
+ 
+- **10.1. AdamW** `lr=5e-4, β₁=0.9, β₂=0.999` — adaptive optimiser that
+  maintains a separate learning rate for each model parameter. `β₁=0.9`
+  means the gradient direction is smoothed over ~10 past steps; `β₂=0.999`
+  means the gradient magnitude is tracked over ~1000 steps — this combination
+  is the standard ViT default from the original paper. The **W** stands for
+  decoupled weight decay, making it more effective than vanilla Adam for
+  regularisation. `lr=5e-4` was chosen as the peak learning rate — higher
+  values caused training instability, lower values slowed convergence
+  without improving final performance.
+- **10.2. Linear Warmup** — the learning rate starts near zero and rises
+  linearly to `5e-4` over the first 50 epochs. At the start of training,
+  weights are random and gradients are chaotic — a large LR would cause
+  destructive updates. 50 epochs was chosen because the model needs more
+  warmup time at `lr=5e-4` than at the standard `1e-4` — the higher peak
+  requires a longer stabilisation phase.
+- **10.3. Cosine Decay** — after warmup, the LR follows a cosine curve
+  down to zero over the remaining 1950 epochs. Unlike step or linear decay,
+  the cosine schedule decreases slowly at first and gently at the end —
+  the model keeps exploring in mid-training, then converges smoothly
+  without oscillations. This is the standard schedule for ViT training.
+- **10.4. Weight Decay** `λ=0.01` — penalises large weights by adding
+  `λ‖θ‖²` to the loss. `0.01` is the standard AdamW default — strong
+  enough to prevent overfitting on the 52k training images, mild enough
+  not to over-constrain the model's capacity to learn vehicle features.
+- **10.5. Dropout** `p=0.1` — during training, 10% of neurons are randomly
+  zeroed at each forward pass. `p=0.1` is deliberately light — heavier
+  dropout would slow convergence on a model already training from scratch
+  without pretrained weights. Disabled at evaluation.
 ### 11. Evaluation — `engine/evaluate.py` + `monitoring/logger.py`
-   - 11.1. **Extract embeddings** `model.eval() + no_grad()` — forward pass on all query and gallery images, no augmentation
-   - 11.2. **kNN search** — cosine distance matrix: `dist = 1 − query_emb @ gallery_emb.T`; rank by ascending distance
-   - 11.3. **Rank-1** — fraction of queries where top-1 retrieved image shares the same identity
-   - 11.4. **mAP** — mean Average Precision; area under precision-recall curve averaged over all queries; **target > 36.0% val mAP**
+ 
+- **11.1. Extract embeddings** — the model switches to evaluation mode
+  (`model.eval()`) which disables dropout for deterministic embeddings.
+  `torch.no_grad()` disables gradient computation — unnecessary at
+  inference, this halves memory usage. No augmentation is applied:
+  stable and reproducible embeddings are required for reliable ranking.
+- **11.2. kNN search** — for each query, a cosine distance is computed
+  against all ~10 500 local gallery images via
+  `dist = 1 − query_emb @ gallery_emb.T`. Since embeddings are
+  L2-normalized, cosine distance is equivalent to euclidean distance.
+  The gallery is then sorted by ascending distance —
+  the most similar images appear at the top.
+- **11.3. Rank-1** — measures whether the correct vehicle is retrieved
+  at position 1. A query is considered correct if its top-1 result shows
+  the same vehicle from a different camera. Simple and intuitive, but
+  does not capture the quality of the full ranking.
+- **11.4. mAP** — measures the quality of the full ranking for each query.
+  For each query, Average Precision computes precision at each retrieved
+  true positive among valid (non-junk) positions only, then averages these
+  values. mAP is the mean over all 88 queries. A model that retrieves all
+  true positives at the top of the list achieves mAP=1. This is the primary
+  challenge metric — stricter than Rank-1 as it penalises true positives
+  ranked too low.
+  **Target: exceed the 36.0% val mAP baseline of the 2021 winners.**
+---
+## Why a Transformer and not a CNN?
+ 
+The 2021 AI City Challenge winners relied on CNN-based architectures —
+primarily ResNet-50 pretrained on ImageNet — combined with re-ranking
+post-processing. Their strong results stemmed largely from the quality
+of the pretrained backbone, not the architecture itself.
+ 
+We deliberately chose a Vision Transformer for two reasons:
+ 
+**Architectural motivation** — CNNs capture local features through
+sliding filters: they are excellent at detecting edges, textures and
+local patterns, but struggle to relate distant parts of an image without
+many stacked layers. A transformer processes all 196 patches simultaneously
+through self-attention — the front bumper can directly attend to the rear
+lights in a single layer. For vehicle Re-ID, where identity cues are
+spread across the whole image (shape, rims, spoilers, color distribution),
+global context matters more than local texture.
+ 
+**Scientific motivation** — the challenge was won in 2021 when transformers
+were only beginning to emerge in computer vision. We revisit it five years
+later to ask: can a modern attention-based architecture match CNN baselines
+from that era, even when trained entirely from scratch without pretrained
+weights? This controlled comparison isolates the architectural contribution
+from the data advantage of pretraining.
+ 
+The constraint of training from scratch is intentional — it shifts the
+focus toward convergence mechanics, metric learning design, and
+regularisation strategies rather than fine-tuning an already powerful backbone.
+ ---
 
 ## Architecture default
 
